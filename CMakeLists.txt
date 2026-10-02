@@ -13,22 +13,41 @@ add_subdirectory(
     ${CMAKE_BINARY_DIR}/chem-interactions
 )
 
-add_executable(
-    geometric_docking
-    src/main.cpp
+# --------------------------------------------------
+# Core library
+# --------------------------------------------------
+
+add_library(
+    docking_core
     src/molecule_io.cpp
     src/interaction_areas.cpp
+    src/geometry.cpp
 )
 
 target_include_directories(
-    geometric_docking
-    PRIVATE
+    docking_core
+    PUBLIC
     include
+)
+
+target_link_libraries(
+    docking_core
+    PUBLIC
+    libinteraction
+    Eigen3::Eigen
+)
+
+# --------------------------------------------------
+# Main application
+# --------------------------------------------------
+
+add_executable(
+    geometric_docking
+    apps/docking_main.cpp
 )
 
 target_link_libraries(
     geometric_docking
     PRIVATE
-    libinteraction
-    Eigen3::Eigen
+    docking_core
 )

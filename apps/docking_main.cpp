@@ -1,5 +1,6 @@
 #include "molecule_io.hpp"
 #include "interaction_areas.hpp"
+#include "geometry.hpp"
 
 #include <filesystem>
 #include <iostream>
@@ -51,6 +52,14 @@ int main()
             << "Ligand interaction areas: "
             << ligand_areas.size()
             << "\n";
+
+        const double ligand_diameter =
+            compute_ligand_diameter(ligand_areas);
+
+        std::cout
+            << "Ligand diameter: "
+            << ligand_diameter
+            << " A\n";
 
         return 0;
     }
