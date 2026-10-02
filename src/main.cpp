@@ -1,4 +1,5 @@
 #include "molecule_io.hpp"
+#include "interaction_areas.hpp"
 
 #include <filesystem>
 #include <iostream>
@@ -33,6 +34,22 @@ int main()
         std::cout
             << "Ligand atoms: "
             << ligand->getNumAtoms()
+            << "\n";
+
+        const auto protein_areas =
+            get_protein_areas(*protein);
+
+        const auto ligand_areas =
+            get_ligand_areas(*ligand);
+
+        std::cout
+            << "Protein interaction areas: "
+            << protein_areas.size()
+            << "\n";
+
+        std::cout
+            << "Ligand interaction areas: "
+            << ligand_areas.size()
             << "\n";
 
         return 0;

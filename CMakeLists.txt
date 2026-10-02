@@ -17,6 +17,7 @@ add_executable(
     geometric_docking
     src/main.cpp
     src/molecule_io.cpp
+    src/interaction_areas.cpp
 )
 
 target_include_directories(
