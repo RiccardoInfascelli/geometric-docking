@@ -22,6 +22,8 @@ add_library(
     src/molecule_io.cpp
     src/interaction_areas.cpp
     src/geometry.cpp
+    src/triplet_generation.cpp
+    src/matching_areas.cpp
 )
 
 target_include_directories(

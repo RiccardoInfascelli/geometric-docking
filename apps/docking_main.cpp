@@ -1,6 +1,7 @@
 #include "molecule_io.hpp"
 #include "interaction_areas.hpp"
 #include "geometry.hpp"
+#include "matching_areas.hpp"
 
 #include <filesystem>
 #include <iostream>
@@ -60,6 +61,23 @@ int main()
             << "Ligand diameter: "
             << ligand_diameter
             << " A\n";
+
+        const auto ligand_matching_areas =
+            build_ligand_matching_areas(ligand_areas);
+
+        const auto protein_matching_areas =
+            build_protein_matching_areas(protein_areas);
+
+        std::cout
+            << "Ligand matching areas: "
+            << ligand_matching_areas.size()
+            << "\n";
+
+        std::cout
+            << "Protein matching areas: "
+            << protein_matching_areas.size()
+            << "\n";
+            
 
         return 0;
     }
