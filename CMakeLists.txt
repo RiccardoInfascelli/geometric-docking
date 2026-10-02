@@ -16,6 +16,7 @@ add_subdirectory(
 add_executable(
     geometric_docking
     src/main.cpp
+    src/molecule_io.cpp
 )
 
 target_include_directories(

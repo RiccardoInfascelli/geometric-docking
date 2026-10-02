@@ -1,30 +1,48 @@
-#include <Eigen/Core>
-#include <GraphMol/ROMol.h>
+#include "molecule_io.hpp"
 
-#include <interaction/elements.hpp>
-
+#include <filesystem>
 #include <iostream>
+#include <stdexcept>
+#include <string>
 
 int main()
 {
-    const Eigen::Vector3d point{1.0, 2.0, 3.0};
+    try {
+        const std::filesystem::path complex_dir =
+            "/workspace/datasets/refined-set/1a1e";
 
-    const auto carbon =
-        interaction::parse_chemical_element("C");
+        const std::string complex_id = "1a1e";
 
-    if (!carbon.has_value()) {
-        std::cerr << "Cannot parse carbon element\n";
+        const auto protein =
+            load_protein(
+                (complex_dir /
+                 (complex_id + "_protein.pdb")).string()
+            );
+
+        const auto ligand =
+            load_ligand(
+                (complex_dir /
+                 (complex_id + "_ligand.mol2")).string()
+            );
+
+        std::cout
+            << "Protein atoms: "
+            << protein->getNumAtoms()
+            << "\n";
+
+        std::cout
+            << "Ligand atoms: "
+            << ligand->getNumAtoms()
+            << "\n";
+
+        return 0;
+    }
+    catch (const std::exception& e) {
+        std::cerr
+            << "Error: "
+            << e.what()
+            << "\n";
+
         return 1;
     }
-
-    std::cout
-        << "Environment OK\n"
-        << "Eigen point: "
-        << point.transpose()
-        << "\n"
-        << "RDKit ROMol type size: "
-        << sizeof(RDKit::ROMol)
-        << "\n";
-
-    return 0;
 }
