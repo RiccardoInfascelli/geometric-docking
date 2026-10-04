@@ -7,12 +7,14 @@ void add_area(
     std::vector<MatchingArea>& result,
     std::size_t source_index,
     const interaction::point3D& centroid,
-    InteractionKey key)
+    InteractionKey key,
+    double interaction_radius = 0.0)
 {
     result.push_back({
         source_index,
         centroid,
-        key
+        key,
+        interaction_radius
     });
 }
 
@@ -111,11 +113,21 @@ std::vector<MatchingArea> build_protein_matching_areas(
          */
         if (area.pattern_class == C::Aromatic) {
 
-            add_area(result, i, area.centroid,
-                     InteractionKey::Aromatic);
+            add_area(
+                result,
+                i,
+                area.centroid,
+                InteractionKey::Aromatic,
+                6.5
+            );
 
-            add_area(result, i, area.centroid,
-                     InteractionKey::Cation);
+            add_area(
+                result,
+                i,
+                area.centroid,
+                InteractionKey::Cation,
+                4.5
+            );
 
             continue;
         }
@@ -123,57 +135,97 @@ std::vector<MatchingArea> build_protein_matching_areas(
         switch (area.pattern) {
 
             case P::Hydrophobic:
-                add_area(result, i, area.centroid,
-                         InteractionKey::Hydrophobic);
+                add_area(
+                    result,
+                    i,
+                    area.centroid,
+                    InteractionKey::Hydrophobic,
+                    4.5
+                );
                 break;
 
             /*
              * Protein donor matches ligand acceptor.
              */
             case P::Hydrogen_donor:
-                add_area(result, i, area.centroid,
-                         InteractionKey::HydrogenAcceptor);
+                add_area(
+                    result,
+                    i,
+                    area.centroid,
+                    InteractionKey::HydrogenAcceptor,
+                    3.5
+                );
                 break;
 
             /*
              * Protein acceptor matches ligand donor.
              */
             case P::Hydrogen_acceptor:
-                add_area(result, i, area.centroid,
-                         InteractionKey::HydrogenDonor);
+                add_area(
+                    result,
+                    i,
+                    area.centroid,
+                    InteractionKey::HydrogenDonor,
+                    3.5
+                );
                 break;
 
             case P::Halogen_donor:
-                add_area(result, i, area.centroid,
-                         InteractionKey::HalogenAcceptor);
+                add_area(
+                    result,
+                    i,
+                    area.centroid,
+                    InteractionKey::HalogenAcceptor,
+                    3.5
+                );
                 break;
 
             case P::Halogen_acceptor:
-                add_area(result, i, area.centroid,
-                         InteractionKey::HalogenDonor);
+                add_area(
+                    result,
+                    i,
+                    area.centroid,
+                    InteractionKey::HalogenDonor,
+                    3.5
+                );
                 break;
 
             /*
              * Protein anion matches ligand cation.
              */
             case P::Anion:
-                add_area(result, i, area.centroid,
-                         InteractionKey::Cation);
+                add_area(
+                    result,
+                    i,
+                    area.centroid,
+                    InteractionKey::Cation,
+                    4.5
+                );
                 break;
 
             /*
              * Protein cation can match:
              *
-             * - ligand anion    -> ionic
-             * - ligand aromatic -> cation-pi
+             * - ligand Anion    -> ionic
+             * - ligand Aromatic -> cation-pi
              */
             case P::Cation:
 
-                add_area(result, i, area.centroid,
-                         InteractionKey::Anion);
+                add_area(
+                    result,
+                    i,
+                    area.centroid,
+                    InteractionKey::Anion,
+                    4.5
+                );
 
-                add_area(result, i, area.centroid,
-                         InteractionKey::Aromatic);
+                add_area(
+                    result,
+                    i,
+                    area.centroid,
+                    InteractionKey::Aromatic,
+                    4.5
+                );
 
                 break;
 
@@ -181,13 +233,23 @@ std::vector<MatchingArea> build_protein_matching_areas(
              * Metal <-> Chelated
              */
             case P::Metal:
-                add_area(result, i, area.centroid,
-                         InteractionKey::Chelated);
+                add_area(
+                    result,
+                    i,
+                    area.centroid,
+                    InteractionKey::Chelated,
+                    3.5
+                );
                 break;
 
             case P::Chelated:
-                add_area(result, i, area.centroid,
-                         InteractionKey::Metal);
+                add_area(
+                    result,
+                    i,
+                    area.centroid,
+                    InteractionKey::Metal,
+                    3.5
+                );
                 break;
 
             default:

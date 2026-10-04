@@ -24,6 +24,10 @@ add_library(
     src/geometry.cpp
     src/triplet_generation.cpp
     src/matching_areas.cpp
+    src/matching_grid.cpp
+    src/protein_grid.cpp
+    src/pose_generation.cpp
+    src/pose_targets.cpp
 )
 
 target_include_directories(

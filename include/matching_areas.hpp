@@ -5,6 +5,7 @@
 
 #include <cstddef>
 #include <vector>
+#include <cstdint>
 
 enum class InteractionKey
 {
@@ -20,11 +21,39 @@ enum class InteractionKey
     Chelated
 };
 
+using InteractionMask = std::uint16_t;
+
+constexpr InteractionMask interaction_key_bit(
+    InteractionKey key)
+{
+    return static_cast<InteractionMask>(
+        InteractionMask{1} <<
+        static_cast<unsigned int>(key)
+    );
+}
+
+constexpr bool has_interaction(
+    InteractionMask mask,
+    InteractionKey key)
+{
+    return
+        (mask & interaction_key_bit(key)) != 0;
+}
+
+constexpr void add_interaction(
+    InteractionMask& mask,
+    InteractionKey key)
+{
+    mask |= interaction_key_bit(key);
+}
+
 struct MatchingArea
 {
     std::size_t source_area_index;
     interaction::point3D centroid;
     InteractionKey key;
+
+    double interaction_radius{0.0};
 };
 
 std::vector<MatchingArea> build_ligand_matching_areas(
