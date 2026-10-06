@@ -87,3 +87,51 @@ std::vector<MatchingArea> transform_matching_areas(
 
     return transformed;
 }
+
+std::vector<interaction::interaction_area>
+transform_interaction_areas(
+    const std::vector<interaction::interaction_area>& areas,
+    const RigidTransform& transform)
+{
+    auto transformed = areas;
+
+    for (auto& area : transformed) {
+
+        // Centro dell'interaction area
+        area.centroid =
+            transform_point(
+                area.centroid,
+                transform
+            );
+
+        // Coordinate degli atomi che definiscono
+        // geometria e orientazione dell'interazione.
+        for (std::size_t i = 0;
+             i < area.num_atoms;
+             ++i) {
+
+            const interaction::point3D point{
+                area.x[i],
+                area.y[i],
+                area.z[i]
+            };
+
+            const auto transformed_point =
+                transform_point(
+                    point,
+                    transform
+                );
+
+            area.x[i] =
+                transformed_point.x;
+
+            area.y[i] =
+                transformed_point.y;
+
+            area.z[i] =
+                transformed_point.z;
+        }
+    }
+
+    return transformed;
+}

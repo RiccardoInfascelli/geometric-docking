@@ -24,12 +24,6 @@ std::vector<PoseTarget> generate_pose_targets(
     double pocket_region_radius = 6.5
 );
 
-std::vector<MatchingArea>
-filter_matching_areas_near_pocket(
-    const std::vector<MatchingArea>& areas,
-    const RDKit::ROMol& pocket,
-    double radius
-);
 
 std::vector<MatchingArea>
 filter_matching_areas_in_pocket(

@@ -470,3 +470,63 @@ GridPoseScore score_ligand_on_grid(
     return score;
 }
 
+
+
+std::size_t count_occupied_voxels(
+    const ProteinGrid& grid)
+{
+    std::size_t count = 0;
+
+    for (const auto& voxel : grid.voxels) {
+
+        if (voxel.occupied)
+            ++count;
+    }
+
+    return count;
+}
+
+
+std::size_t count_interaction_voxels(
+    const ProteinGrid& grid)
+{
+    std::size_t count = 0;
+
+    for (const auto& voxel : grid.voxels) {
+
+        if (voxel.interactions != 0)
+            ++count;
+    }
+
+    return count;
+}
+
+
+std::size_t count_multi_interaction_voxels(
+    const ProteinGrid& grid)
+{
+    std::size_t count = 0;
+
+    for (const auto& voxel : grid.voxels) {
+
+        InteractionMask mask =
+            voxel.interactions;
+
+        std::size_t bits = 0;
+
+        while (mask != 0) {
+
+            bits +=
+                static_cast<std::size_t>(
+                    mask & InteractionMask{1}
+                );
+
+            mask >>= 1;
+        }
+
+        if (bits > 1)
+            ++count;
+    }
+
+    return count;
+}

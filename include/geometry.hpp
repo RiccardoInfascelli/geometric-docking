@@ -38,4 +38,10 @@ std::vector<MatchingArea> transform_matching_areas(
     const RigidTransform& transform
 );
 
+std::vector<interaction::interaction_area>
+transform_interaction_areas(
+    const std::vector<interaction::interaction_area>& areas,
+    const RigidTransform& transform
+);
+
 #endif

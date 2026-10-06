@@ -96,5 +96,17 @@ GridPoseScore score_ligand_on_grid(
     const ProteinGrid& grid
 );
 
+std::size_t count_occupied_voxels(
+    const ProteinGrid& grid
+);
+
+std::size_t count_interaction_voxels(
+    const ProteinGrid& grid
+);
+
+std::size_t count_multi_interaction_voxels(
+    const ProteinGrid& grid
+);
+
 
 #endif // PROTEIN_GRID_HPP

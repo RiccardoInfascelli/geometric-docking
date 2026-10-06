@@ -28,6 +28,15 @@ add_library(
     src/protein_grid.cpp
     src/pose_generation.cpp
     src/pose_targets.cpp
+    src/interaction_scoring.cpp
+    src/clash.cpp
+    src/diagnostics.cpp
+    src/pose_ranking.cpp
+    src/run_config.cpp
+    src/pipeline.cpp
+    src/report.cpp
+    src/pose_output.cpp
+    src/benchmark_csv.cpp
 )
 
 target_include_directories(
