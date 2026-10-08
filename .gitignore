@@ -9,3 +9,5 @@ CMakeCache.txt
 CMakeFiles/
 compile_commands.json
 results/
+# Local diagnostic outputs
+inspect/
