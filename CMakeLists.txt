@@ -6,6 +6,25 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+# --------------------------------------------------
+# Optional CUDA backend
+# --------------------------------------------------
+
+option(
+    ENABLE_CUDA
+    "Build the CUDA docking backend"
+    OFF
+)
+
+if(ENABLE_CUDA)
+    enable_language(CUDA)
+    find_package(CUDAToolkit REQUIRED)
+
+    message(STATUS "CUDA backend enabled")
+else()
+    message(STATUS "CUDA backend disabled")
+endif()
+
 find_package(Eigen3 REQUIRED)
 
 add_subdirectory(
@@ -42,14 +61,14 @@ add_library(
 target_include_directories(
     docking_core
     PUBLIC
-    include
+        include
 )
 
 target_link_libraries(
     docking_core
     PUBLIC
-    libinteraction
-    Eigen3::Eigen
+        libinteraction
+        Eigen3::Eigen
 )
 
 # --------------------------------------------------
@@ -64,10 +83,13 @@ add_executable(
 target_link_libraries(
     geometric_docking
     PRIVATE
-    docking_core
+        docking_core
 )
 
-# PROV
+# --------------------------------------------------
+# Diagnostic / experimental executables
+# --------------------------------------------------
+
 add_executable(
     triplet_failure_diagnostic
     apps/triplet_failure_diagnostic_main.cpp
@@ -75,10 +97,10 @@ add_executable(
 
 target_link_libraries(
     triplet_failure_diagnostic
-    PRIVATE docking_core
+    PRIVATE
+        docking_core
 )
 
-#PROV
 add_executable(
     clash_threshold_experiment
     apps/clash_threshold_experiment_main.cpp
@@ -93,6 +115,7 @@ target_link_libraries(
 bsl_set_cxx_flags(
     clash_threshold_experiment
 )
+
 add_executable(
     pose_target_shift_experiment
     apps/pose_target_shift_experiment_main.cpp
@@ -183,9 +206,9 @@ bsl_set_cxx_flags(
     pocket_openness_experiment
 )
 
-# ============================================================
+# --------------------------------------------------
 # Serial reference docking
-# ============================================================
+# --------------------------------------------------
 
 add_executable(
     serial_docking
