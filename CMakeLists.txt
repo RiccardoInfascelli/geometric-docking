@@ -87,6 +87,49 @@ target_link_libraries(
 )
 
 # --------------------------------------------------
+# CUDA backend
+# --------------------------------------------------
+
+if(ENABLE_CUDA)
+
+    add_library(
+        docking_cuda
+        src/cuda/cuda_backend.cu
+    )
+
+    target_include_directories(
+        docking_cuda
+        PUBLIC
+            include
+    )
+
+    target_link_libraries(
+        docking_cuda
+        PUBLIC
+            CUDA::cudart
+    )
+
+    set_target_properties(
+        docking_cuda
+        PROPERTIES
+            CUDA_STANDARD 17
+            CUDA_STANDARD_REQUIRED ON
+    )
+
+    add_executable(
+        cuda_smoke_test
+        apps/cuda_smoke_test.cpp
+    )
+
+    target_link_libraries(
+        cuda_smoke_test
+        PRIVATE
+            docking_cuda
+    )
+
+endif()
+
+# --------------------------------------------------
 # Diagnostic / experimental executables
 # --------------------------------------------------
 

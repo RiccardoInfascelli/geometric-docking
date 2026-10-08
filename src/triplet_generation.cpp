@@ -3,6 +3,7 @@
 #include <interaction/geometric_features.hpp>
 
 #include <cmath>
+#include <algorithm>
 
 
 namespace
@@ -711,4 +712,289 @@ find_neighbor_triplet_buckets(
     }
 
     return result;
+}
+
+FlatTripletIndex flatten_protein_triplet_index(
+    const ProteinTripletHashTable& table
+)
+{
+    FlatTripletIndex result;
+
+
+    result.keys.reserve(
+        table.size()
+    );
+
+
+    for (const auto& [key, bucket] :
+         table) {
+
+        (void)bucket;
+
+        result.keys.push_back(
+            key
+        );
+    }
+
+
+    const auto key_less =
+        [](
+            const TripletKey& a,
+            const TripletKey& b
+        )
+        {
+            if (a.keys != b.keys) {
+                return a.keys < b.keys;
+            }
+
+            return
+                a.distance_bins <
+                b.distance_bins;
+        };
+
+
+    std::sort(
+        result.keys.begin(),
+        result.keys.end(),
+        key_less
+    );
+
+
+    result.offsets.reserve(
+        result.keys.size() + 1
+    );
+
+
+    result.offsets.push_back(0);
+
+
+    for (const auto& key :
+         result.keys) {
+
+        const auto it =
+            table.find(
+                key
+            );
+
+
+        if (it == table.end()) {
+            continue;
+        }
+
+
+        result.records.insert(
+            result.records.end(),
+            it->second.begin(),
+            it->second.end()
+        );
+
+
+        result.offsets.push_back(
+            result.records.size()
+        );
+    }
+
+
+    return result;
+}
+
+std::vector<FlatTripletBucket>
+find_neighbor_triplet_buckets_flat(
+    const FlatTripletIndex& index,
+    const CanonicalTriplet& ligand_triplet
+)
+{
+    std::vector<FlatTripletBucket> result;
+
+
+    const auto key_less =
+        [](
+            const TripletKey& a,
+            const TripletKey& b
+        )
+        {
+            if (a.keys != b.keys) {
+                return a.keys < b.keys;
+            }
+
+            return
+                a.distance_bins <
+                b.distance_bins;
+        };
+
+
+    const TripletKey base_key =
+        make_triplet_key(
+            ligand_triplet
+        );
+
+
+    for (int d0 = -1; d0 <= 1; ++d0) {
+
+        for (int d1 = -1; d1 <= 1; ++d1) {
+
+            for (int d2 = -1; d2 <= 1; ++d2) {
+
+                TripletKey key =
+                    base_key;
+
+
+                const int delta[3] = {
+                    d0,
+                    d1,
+                    d2
+                };
+
+
+                bool valid = true;
+
+
+                for (std::size_t i = 0;
+                     i < 3;
+                     ++i) {
+
+                    if (delta[i] < 0) {
+
+                        if (
+                            key.distance_bins[i] == 0
+                        ) {
+                            valid = false;
+                            break;
+                        }
+
+                        --key.distance_bins[i];
+                    }
+                    else if (delta[i] > 0) {
+
+                        ++key.distance_bins[i];
+                    }
+                }
+
+
+                if (!valid) {
+                    continue;
+                }
+
+
+                const auto it =
+                    std::lower_bound(
+                        index.keys.begin(),
+                        index.keys.end(),
+                        key,
+                        key_less
+                    );
+
+
+                if (
+                    it == index.keys.end() ||
+                    !(*it == key)
+                ) {
+                    continue;
+                }
+
+
+                const std::size_t key_index =
+                    static_cast<std::size_t>(
+                        std::distance(
+                            index.keys.begin(),
+                            it
+                        )
+                    );
+
+
+                result.push_back({
+                    index.offsets[key_index],
+                    index.offsets[key_index + 1]
+                });
+            }
+        }
+    }
+
+
+    return result;
+}
+
+bool validate_flat_triplet_index(
+    const ProteinTripletHashTable& table,
+    const FlatTripletIndex& flat_index
+)
+{
+    if (
+        flat_index.keys.size() != table.size() ||
+        flat_index.offsets.size() !=
+            flat_index.keys.size() + 1
+    ) {
+        return false;
+    }
+
+
+    std::size_t expected_records = 0;
+
+    for (const auto& [key, bucket] : table) {
+        (void)key;
+
+        expected_records +=
+            bucket.size();
+    }
+
+
+    if (
+        flat_index.records.size() !=
+        expected_records
+    ) {
+        return false;
+    }
+
+
+    for (std::size_t key_index = 0;
+         key_index < flat_index.keys.size();
+         ++key_index) {
+
+        const auto& key =
+            flat_index.keys[key_index];
+
+
+        const auto table_it =
+            table.find(key);
+
+
+        if (table_it == table.end()) {
+            return false;
+        }
+
+
+        const auto& original_bucket =
+            table_it->second;
+
+
+        const std::size_t begin =
+            flat_index.offsets[key_index];
+
+        const std::size_t end =
+            flat_index.offsets[key_index + 1];
+
+
+        if (
+            end - begin !=
+            original_bucket.size()
+        ) {
+            return false;
+        }
+
+
+        for (std::size_t i = 0;
+             i < original_bucket.size();
+             ++i) {
+
+            if (
+                flat_index.records[begin + i].indices !=
+                original_bucket[i].indices
+            ) {
+                return false;
+            }
+        }
+    }
+
+
+    return true;
 }

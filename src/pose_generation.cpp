@@ -336,9 +336,7 @@ double rmsd_from_transform(
 
 
 
-
-
-PoseGenerationResult generate_candidate_poses(
+PoseGenerationResult generate_candidate_poses_from_index(
 
     const RDKit::ROMol& ligand,
 
@@ -350,7 +348,7 @@ PoseGenerationResult generate_candidate_poses(
 
     const ProteinGrid& protein_grid,
 
-    double ligand_diameter,
+    const ProteinTripletHashTable& protein_triplet_hash,
 
     double triplet_bin_size,
 
@@ -380,71 +378,17 @@ PoseGenerationResult generate_candidate_poses(
 
 
 
-
-
     // ========================================================
-
-    // Protein target triplet hash
-
+    // Protein triplet index statistics
+    //
+    // L'indice viene ricevuto già costruito.
     // ========================================================
-
-
-
-
-
-    const auto index_start =
-
-        Clock::now();
-
-
-
-
-
-    const auto protein_triplet_hash =
-
-        build_protein_triplet_hash_table(
-
-            pose_targets,
-
-            ligand_diameter,
-
-            triplet_bin_size
-
-        );
-
-
-
-
-
-    const auto index_end =
-
-        Clock::now();
-
-
-
-
-
-    result.timings
-
-        .protein_triplet_index_seconds =
-
-            std::chrono::duration<double>(
-
-                index_end -
-
-                index_start
-
-            ).count();
-
-
 
 
 
     for (const auto& [key, bucket] :
 
          protein_triplet_hash) {
-
-
 
         (void)key;
 
@@ -464,12 +408,8 @@ PoseGenerationResult generate_candidate_poses(
 
 
 
-
-
     // ========================================================
-
     // Candidate pose generation
-
     // ========================================================
 
 
@@ -479,19 +419,16 @@ PoseGenerationResult generate_candidate_poses(
     double oracle_rmsd_seconds = 0.0;
 
 
+
     const auto generation_start =
 
         Clock::now();
 
 
 
-
-
     for (const auto& ligand_triplet :
 
          ligand_triplets) {
-
-
 
         const auto canonical =
 
@@ -516,12 +453,15 @@ PoseGenerationResult generate_candidate_poses(
             );
 
 
+
         if (buckets.empty())
 
             continue;
 
 
+
         ++result.ligand_triplets_with_match;
+
 
 
         for (const auto* bucket :
@@ -531,6 +471,7 @@ PoseGenerationResult generate_candidate_poses(
             result.total_candidate_matches +=
 
                 bucket->size();
+
 
 
             result.largest_bucket =
@@ -547,19 +488,13 @@ PoseGenerationResult generate_candidate_poses(
 
 
 
-
-
         for (const auto* bucket :
 
              buckets) {
 
-
-
             for (const auto& protein_record :
 
                  *bucket) {
-
-
 
                 const std::array<
 
@@ -569,23 +504,17 @@ PoseGenerationResult generate_candidate_poses(
 
                 > target_points{
 
-
-
                     pose_targets[
 
                         protein_record.indices[0]
 
                     ].position,
 
-
-
                     pose_targets[
 
                         protein_record.indices[1]
 
                     ].position,
-
-
 
                     pose_targets[
 
@@ -594,8 +523,6 @@ PoseGenerationResult generate_candidate_poses(
                     ].position
 
                 };
-
-
 
 
 
@@ -621,8 +548,6 @@ PoseGenerationResult generate_candidate_poses(
 
 
 
-
-
                     const std::array<
 
                         interaction::point3D,
@@ -631,23 +556,17 @@ PoseGenerationResult generate_candidate_poses(
 
                     > source_points{
 
-
-
                         ligand_matching_areas[
 
                             ligand_order[0]
 
                         ].centroid,
 
-
-
                         ligand_matching_areas[
 
                             ligand_order[1]
 
                         ].centroid,
-
-
 
                         ligand_matching_areas[
 
@@ -659,17 +578,11 @@ PoseGenerationResult generate_candidate_poses(
 
 
 
-
-
                     ++result.transforms_generated;
 
 
 
-
-
                     RigidTransform transform;
-
-
 
 
 
@@ -693,18 +606,12 @@ PoseGenerationResult generate_candidate_poses(
 
 
 
-
-
                     ++result.transforms_valid;
 
 
 
-
-
                     // ----------------------------------------
-
                     // Fast grid score
-
                     // ----------------------------------------
 
 
@@ -712,6 +619,7 @@ PoseGenerationResult generate_candidate_poses(
                     const auto grid_clash_start =
 
                         Clock::now();
+
 
 
                     const auto transformed_matching =
@@ -738,8 +646,6 @@ PoseGenerationResult generate_candidate_poses(
 
 
 
-
-
                     if (
 
                         grid_score.compatible_areas > 0
@@ -749,8 +655,6 @@ PoseGenerationResult generate_candidate_poses(
                         ++result.poses_with_grid_support;
 
                     }
-
-
 
 
 
@@ -766,12 +670,8 @@ PoseGenerationResult generate_candidate_poses(
 
 
 
-
-
                     // ----------------------------------------
-
                     // Fast clash
-
                     // ----------------------------------------
 
 
@@ -789,9 +689,11 @@ PoseGenerationResult generate_candidate_poses(
                         );
 
 
+
                     const auto grid_clash_end =
 
                         Clock::now();
+
 
 
                     grid_clash_seconds +=
@@ -803,8 +705,6 @@ PoseGenerationResult generate_candidate_poses(
                             grid_clash_start
 
                         ).count();
-
-
 
 
 
@@ -824,13 +724,16 @@ PoseGenerationResult generate_candidate_poses(
 
 
 
+                    // ----------------------------------------
+                    // RMSD oracle only
+                    // ----------------------------------------
 
 
-                    // ORACLE ONLY
 
                     const auto rmsd_start =
 
                         Clock::now();
+
 
 
                     const double rmsd =
@@ -844,9 +747,11 @@ PoseGenerationResult generate_candidate_poses(
                         );
 
 
+
                     const auto rmsd_end =
 
                         Clock::now();
+
 
 
                     oracle_rmsd_seconds +=
@@ -861,12 +766,8 @@ PoseGenerationResult generate_candidate_poses(
 
 
 
-
-
                     // ----------------------------------------
-
                     // Clash threshold experiment
-
                     // ----------------------------------------
 
 
@@ -933,19 +834,13 @@ PoseGenerationResult generate_candidate_poses(
 
 
 
-
-
                     // ----------------------------------------
-
                     // Absolute clash diagnostic
-
                     // ----------------------------------------
 
 
 
                     if (clash.occupied_atoms == 0) {
-
-
 
                         ++result.poses_zero_clash;
 
@@ -987,23 +882,17 @@ PoseGenerationResult generate_candidate_poses(
 
                     else if (clash.occupied_atoms == 1) {
 
-
-
                         ++result.poses_one_clash;
 
                     }
 
                     else if (clash.occupied_atoms == 2) {
 
-
-
                         ++result.poses_two_clashes;
 
                     }
 
                     else if (clash.occupied_atoms <= 5) {
-
-
 
                         ++result
 
@@ -1013,20 +902,14 @@ PoseGenerationResult generate_candidate_poses(
 
                     else {
 
-
-
                         ++result.poses_over_five_clashes;
 
                     }
 
 
 
-
-
                     // ----------------------------------------
-
-                    // Operational 5% survivor set
-
+                    // Operational survivor set
                     // ----------------------------------------
 
 
@@ -1042,8 +925,6 @@ PoseGenerationResult generate_candidate_poses(
                         continue;
 
                     }
-
-
 
 
 
@@ -1081,8 +962,6 @@ PoseGenerationResult generate_candidate_poses(
 
 
 
-
-
                     result.surviving_poses.push_back(
 
                         record
@@ -1099,13 +978,9 @@ PoseGenerationResult generate_candidate_poses(
 
 
 
-
-
     const auto generation_end =
 
         Clock::now();
-
-
 
 
 
@@ -1120,14 +995,17 @@ PoseGenerationResult generate_candidate_poses(
         ).count();
 
 
+
     result.timings.grid_clash_seconds =
 
         grid_clash_seconds;
 
 
+
     result.timings.oracle_rmsd_seconds =
 
         oracle_rmsd_seconds;
+
 
 
     const double matching_kabsch_seconds =
@@ -1137,6 +1015,7 @@ PoseGenerationResult generate_candidate_poses(
         grid_clash_seconds -
 
         oracle_rmsd_seconds;
+
 
 
     result.timings.matching_kabsch_seconds =
@@ -1151,8 +1030,64 @@ PoseGenerationResult generate_candidate_poses(
 
 
 
+    return result;
+
+}
+
+
+
+PoseGenerationResult generate_candidate_poses(
+    const RDKit::ROMol& ligand,
+    const std::vector<MatchingArea>& ligand_matching_areas,
+    const std::vector<Triplet>& ligand_triplets,
+    const std::vector<PoseTarget>& pose_targets,
+    const ProteinGrid& protein_grid,
+    double ligand_diameter,
+    double triplet_bin_size,
+    double operational_clash_threshold,
+    const std::array<double, 4>& clash_thresholds)
+{
+    using Clock =
+        std::chrono::steady_clock;
+
+
+    const auto index_start =
+        Clock::now();
+
+
+    const auto protein_triplet_hash =
+        build_protein_triplet_hash_table(
+            pose_targets,
+            ligand_diameter,
+            triplet_bin_size
+        );
+
+
+    const auto index_end =
+        Clock::now();
+
+
+    auto result =
+        generate_candidate_poses_from_index(
+            ligand,
+            ligand_matching_areas,
+            ligand_triplets,
+            pose_targets,
+            protein_grid,
+            protein_triplet_hash,
+            triplet_bin_size,
+            operational_clash_threshold,
+            clash_thresholds
+        );
+
+
+    result.timings
+        .protein_triplet_index_seconds =
+            std::chrono::duration<double>(
+                index_end -
+                index_start
+            ).count();
 
 
     return result;
-
 }

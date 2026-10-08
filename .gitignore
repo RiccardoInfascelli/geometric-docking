@@ -11,3 +11,7 @@ compile_commands.json
 results/
 # Local diagnostic outputs
 inspect/
+
+# Local build directories
+build-cpu/
+build-cuda/

@@ -110,6 +110,18 @@ bool rigid_transform_from_points(
     RigidTransform& transform
 );
 
+PoseGenerationResult generate_candidate_poses_from_index(
+    const RDKit::ROMol& ligand,
+    const std::vector<MatchingArea>& ligand_matching_areas,
+    const std::vector<Triplet>& ligand_triplets,
+    const std::vector<PoseTarget>& pose_targets,
+    const ProteinGrid& protein_grid,
+    const ProteinTripletHashTable& protein_triplet_hash,
+    double triplet_bin_size,
+    double operational_clash_threshold,
+    const std::array<double, 4>& clash_thresholds
+);
+
 
 PoseGenerationResult generate_candidate_poses(
     const RDKit::ROMol& ligand,

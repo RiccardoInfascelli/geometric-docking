@@ -17,6 +17,7 @@
 #include <cstddef>
 #include <unordered_set>
 #include <chrono>
+#include <stdexcept>
 
 
 RunResult run_pipeline(
@@ -291,36 +292,84 @@ RunResult run_pipeline(
             ).count();
 
 
+
     // ========================================================
     // ONLINE - POSE SEARCH
     //
-    // Include:
-    // - protein triplet index
-    // - neighbor lookup
-    // - rigid transforms
-    // - grid support
-    // - clash filtering
-    //
-    // L'indice protein triplets è ancora ONLINE perché
-    // attualmente dipende da ligand_diameter.
+    // L'indice proteico è costruito esplicitamente qui.
+    // Per ora dipende ancora da ligand_diameter.
     // ========================================================
 
     const auto pose_search_start =
         std::chrono::steady_clock::now();
 
 
+    // --------------------------------------------------------
+    // Protein triplet index
+    // --------------------------------------------------------
+
+    const auto index_start =
+        std::chrono::steady_clock::now();
+
+
+    const auto protein_triplet_hash =
+        build_protein_triplet_hash_table(
+            pose_targets,
+            ligand_diameter,
+            config.triplet_bin_size
+        );
+
+    const auto flat_triplet_index =
+        flatten_protein_triplet_index(
+            protein_triplet_hash
+        );
+
+
+    if (
+        !validate_flat_triplet_index(
+            protein_triplet_hash,
+            flat_triplet_index
+        )
+    ) {
+        throw std::runtime_error(
+            "Flat protein triplet index validation failed"
+        );
+    }
+
+
+    const auto index_end =
+        std::chrono::steady_clock::now();
+
+
+    const double protein_index_seconds =
+        std::chrono::duration<double>(
+            index_end -
+            index_start
+        ).count();
+
+
+    // --------------------------------------------------------
+    // Candidate pose generation
+    // --------------------------------------------------------
+
     result.pose_generation =
-        generate_candidate_poses(
+        generate_candidate_poses_from_index(
             *ligand,
             ligand_matching_areas,
             ligand_triplets,
             pose_targets,
             protein_grid,
-            ligand_diameter,
+            protein_triplet_hash,
             config.triplet_bin_size,
             config.operational_clash_threshold,
             config.clash_thresholds
         );
+
+
+    result.pose_generation
+        .timings
+        .protein_triplet_index_seconds =
+            protein_index_seconds;
 
 
     const auto pose_search_end =
