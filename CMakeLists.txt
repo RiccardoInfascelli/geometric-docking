@@ -56,6 +56,7 @@ add_library(
     src/report.cpp
     src/pose_output.cpp
     src/benchmark_csv.cpp
+    src/cuda/cuda_triplet_index.cpp
 )
 
 target_include_directories(
@@ -95,6 +96,7 @@ if(ENABLE_CUDA)
     add_library(
         docking_cuda
         src/cuda/cuda_backend.cu
+        src/cuda/cuda_triplet_index.cu
     )
 
     target_include_directories(
@@ -112,7 +114,7 @@ if(ENABLE_CUDA)
     set_target_properties(
         docking_cuda
         PROPERTIES
-            CUDA_STANDARD 17
+            CUDA_STANDARD 20
             CUDA_STANDARD_REQUIRED ON
     )
 
@@ -128,6 +130,17 @@ if(ENABLE_CUDA)
     )
 
 endif()
+
+add_executable(
+    gpu_triplet_index_test
+    apps/gpu_triplet_index_test.cpp
+)
+
+target_link_libraries(
+    gpu_triplet_index_test
+    PRIVATE
+        docking_core
+)
 
 # --------------------------------------------------
 # Diagnostic / experimental executables
