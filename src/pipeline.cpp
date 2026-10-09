@@ -359,7 +359,7 @@ RunResult run_pipeline(
             ligand_triplets,
             pose_targets,
             protein_grid,
-            protein_triplet_hash,
+            flat_triplet_index,
             config.triplet_bin_size,
             config.operational_clash_threshold,
             config.clash_thresholds

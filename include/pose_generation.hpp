@@ -116,7 +116,7 @@ PoseGenerationResult generate_candidate_poses_from_index(
     const std::vector<Triplet>& ligand_triplets,
     const std::vector<PoseTarget>& pose_targets,
     const ProteinGrid& protein_grid,
-    const ProteinTripletHashTable& protein_triplet_hash,
+    const FlatTripletIndex& protein_triplet_index,
     double triplet_bin_size,
     double operational_clash_threshold,
     const std::array<double, 4>& clash_thresholds

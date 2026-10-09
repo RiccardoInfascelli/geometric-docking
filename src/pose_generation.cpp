@@ -348,7 +348,7 @@ PoseGenerationResult generate_candidate_poses_from_index(
 
     const ProteinGrid& protein_grid,
 
-    const ProteinTripletHashTable& protein_triplet_hash,
+    const FlatTripletIndex& protein_triplet_index,
 
     double triplet_bin_size,
 
@@ -386,25 +386,11 @@ PoseGenerationResult generate_candidate_poses_from_index(
 
 
 
-    for (const auto& [key, bucket] :
-
-         protein_triplet_hash) {
-
-        (void)key;
-
-
-
-        result.protein_triplet_records +=
-
-            bucket.size();
-
-    }
-
-
+    result.protein_triplet_records =
+        protein_triplet_index.records.size();
 
     result.protein_hash_keys =
-
-        protein_triplet_hash.size();
+        protein_triplet_index.keys.size();
 
 
 
@@ -443,13 +429,9 @@ PoseGenerationResult generate_candidate_poses_from_index(
 
 
         const auto buckets =
-
-            find_neighbor_triplet_buckets(
-
-                protein_triplet_hash,
-
+            find_neighbor_triplet_buckets_flat(
+                protein_triplet_index,
                 canonical
-
             );
 
 
@@ -464,44 +446,45 @@ PoseGenerationResult generate_candidate_poses_from_index(
 
 
 
-        for (const auto* bucket :
+        for (const auto& bucket :
+            buckets) {
 
-             buckets) {
+            const auto [begin, end] =
+                bucket;
+
+            const std::size_t bucket_size =
+                end - begin;
 
             result.total_candidate_matches +=
-
-                bucket->size();
-
-
+                bucket_size;
 
             result.largest_bucket =
-
                 std::max(
-
                     result.largest_bucket,
-
-                    bucket->size()
-
+                    bucket_size
                 );
-
         }
 
 
 
-        for (const auto* bucket :
+        for (const auto& bucket :
+            buckets) {
 
-             buckets) {
+            const auto [begin, end] =
+                bucket;
 
-            for (const auto& protein_record :
+            for (std::size_t record_index = begin;
+                record_index < end;
+                ++record_index) {
 
-                 *bucket) {
+                const auto& protein_record =
+                    protein_triplet_index.records[
+                        record_index
+                    ];
 
                 const std::array<
-
                     interaction::point3D,
-
                     3
-
                 > target_points{
 
                     pose_targets[
@@ -1061,6 +1044,11 @@ PoseGenerationResult generate_candidate_poses(
             ligand_diameter,
             triplet_bin_size
         );
+        
+    const auto flat_triplet_index =
+        flatten_protein_triplet_index(
+            protein_triplet_hash
+        );
 
 
     const auto index_end =
@@ -1074,7 +1062,7 @@ PoseGenerationResult generate_candidate_poses(
             ligand_triplets,
             pose_targets,
             protein_grid,
-            protein_triplet_hash,
+            flat_triplet_index,
             triplet_bin_size,
             operational_clash_threshold,
             clash_thresholds
