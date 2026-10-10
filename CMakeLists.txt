@@ -106,6 +106,7 @@ if(ENABLE_CUDA)
         src/cuda/cuda_grid_upload.cu
         src/cuda/cuda_clash.cu
         src/cuda/cuda_fast_score.cu
+        src/cuda/cuda_pose_pipeline.cpp
     )
 
     target_include_directories(
@@ -190,6 +191,17 @@ if(ENABLE_CUDA)
 
     target_link_libraries(
         cuda_fast_score_test
+        PRIVATE
+            docking_cuda
+    )
+
+    add_executable(
+        cuda_pose_pipeline_test
+        apps/cuda_pose_pipeline_test.cpp
+    )
+
+    target_link_libraries(
+        cuda_pose_pipeline_test
         PRIVATE
             docking_cuda
     )
