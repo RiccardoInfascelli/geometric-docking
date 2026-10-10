@@ -126,4 +126,16 @@ static_assert(
     sizeof(GpuPoint3) == 24
 );
 
+struct GpuPointArrayDevice
+{
+    GpuPoint3* points{nullptr};
+    std::uint32_t count{};
+};
+
+static_assert(
+    std::is_trivially_copyable_v<
+        GpuPointArrayDevice
+    >
+);
+
 #endif

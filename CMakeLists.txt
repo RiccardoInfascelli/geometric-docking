@@ -99,7 +99,8 @@ if(ENABLE_CUDA)
         src/cuda/cuda_backend.cu
         src/cuda/cuda_triplet_index.cu
         src/cuda/cuda_triplet_lookup.cu
-)
+        src/cuda/cuda_geometry_upload.cu
+    )
 
     target_include_directories(
         docking_cuda
@@ -141,6 +142,17 @@ if(ENABLE_CUDA)
         PRIVATE
             docking_cuda
     )
+
+    add_executable(
+        cuda_geometry_upload_test
+        apps/cuda_geometry_upload_test.cpp
+    )
+
+    target_link_libraries(
+        cuda_geometry_upload_test
+        PRIVATE
+            docking_cuda
+)
 
 
 endif()

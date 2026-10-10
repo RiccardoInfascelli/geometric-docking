@@ -69,4 +69,18 @@ bool cuda_expand_alignment_candidates(
     std::vector<GpuAlignmentCandidate>& alignments
 );
 
+bool cuda_upload_points(
+    const std::vector<GpuPoint3>& host_points,
+    GpuPointArrayDevice& device_points
+);
+
+bool cuda_download_points(
+    const GpuPointArrayDevice& device_points,
+    std::vector<GpuPoint3>& host_points
+);
+
+void cuda_free_points(
+    GpuPointArrayDevice& device_points
+);
+
 #endif
