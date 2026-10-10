@@ -1,6 +1,8 @@
 #ifndef CUDA_GEOMETRY_HPP
 #define CUDA_GEOMETRY_HPP
 
+#include <GraphMol/ROMol.h>
+
 #include "cuda_triplet_types.hpp"
 #include "matching_areas.hpp"
 #include "pose_targets.hpp"
@@ -17,6 +19,11 @@ make_gpu_ligand_matching_points(
 std::vector<GpuPoint3>
 make_gpu_pose_target_points(
     const std::vector<PoseTarget>& targets
+);
+
+std::vector<GpuPoint3>
+make_gpu_ligand_atom_points(
+    const RDKit::ROMol& ligand
 );
 
 
