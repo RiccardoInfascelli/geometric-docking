@@ -97,7 +97,8 @@ if(ENABLE_CUDA)
         docking_cuda
         src/cuda/cuda_backend.cu
         src/cuda/cuda_triplet_index.cu
-    )
+        src/cuda/cuda_triplet_lookup.cu
+)
 
     target_include_directories(
         docking_cuda
@@ -128,6 +129,18 @@ if(ENABLE_CUDA)
         PRIVATE
             docking_cuda
     )
+
+    add_executable(
+        cuda_triplet_lookup_test
+        apps/cuda_triplet_lookup_test.cpp
+    )
+
+    target_link_libraries(
+        cuda_triplet_lookup_test
+        PRIVATE
+            docking_cuda
+    )
+
 
 endif()
 

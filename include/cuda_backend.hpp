@@ -3,6 +3,13 @@
 
 #include "cuda_triplet_types.hpp"
 
+#include <cstdint>
+#include <vector>
+
+
+inline constexpr std::uint32_t
+GPU_TRIPLET_KEY_NOT_FOUND = 0xFFFFFFFFu;
+
 
 bool cuda_smoke_test();
 
@@ -15,6 +22,13 @@ bool cuda_upload_triplet_index(
 
 void cuda_free_triplet_index(
     GpuFlatTripletIndexDevice& device_index
+);
+
+
+bool cuda_lookup_triplet_keys_exact(
+    const GpuFlatTripletIndexDevice& device_index,
+    const std::vector<GpuTripletKey>& queries,
+    std::vector<std::uint32_t>& key_indices
 );
 
 
