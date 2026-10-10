@@ -57,6 +57,7 @@ add_library(
     src/pose_output.cpp
     src/benchmark_csv.cpp
     src/cuda/cuda_triplet_index.cpp
+    src/cuda/cuda_geometry.cpp
 )
 
 target_include_directories(
@@ -151,6 +152,17 @@ add_executable(
 
 target_link_libraries(
     gpu_triplet_index_test
+    PRIVATE
+        docking_core
+)
+
+add_executable(
+    gpu_geometry_test
+    apps/gpu_geometry_test.cpp
+)
+
+target_link_libraries(
+    gpu_geometry_test
     PRIVATE
         docking_core
 )

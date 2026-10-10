@@ -111,4 +111,19 @@ static_assert(
     sizeof(GpuAlignmentCandidate) == 24
 );
 
+struct GpuPoint3
+{
+    double x{};
+    double y{};
+    double z{};
+};
+
+static_assert(
+    std::is_trivially_copyable_v<GpuPoint3>
+);
+
+static_assert(
+    sizeof(GpuPoint3) == 24
+);
+
 #endif
