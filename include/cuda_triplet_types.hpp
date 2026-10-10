@@ -138,4 +138,23 @@ static_assert(
     >
 );
 
+struct GpuRigidTransform
+{
+    double rotation[9]{};
+    double translation[3]{};
+
+    std::uint32_t valid{};
+    std::uint32_t padding[3]{};
+};
+
+static_assert(
+    std::is_trivially_copyable_v<
+        GpuRigidTransform
+    >
+);
+
+static_assert(
+    sizeof(GpuRigidTransform) == 112
+);
+
 #endif

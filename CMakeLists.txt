@@ -100,6 +100,7 @@ if(ENABLE_CUDA)
         src/cuda/cuda_triplet_index.cu
         src/cuda/cuda_triplet_lookup.cu
         src/cuda/cuda_geometry_upload.cu
+        src/cuda/cuda_kabsch.cu
     )
 
     target_include_directories(
@@ -112,6 +113,7 @@ if(ENABLE_CUDA)
         docking_cuda
         PUBLIC
             CUDA::cudart
+            CUDA::cusolver
     )
 
     set_target_properties(
@@ -152,7 +154,18 @@ if(ENABLE_CUDA)
         cuda_geometry_upload_test
         PRIVATE
             docking_cuda
-)
+    )
+
+    add_executable(
+        cuda_kabsch_test
+        apps/cuda_kabsch_test.cpp
+    )
+
+    target_link_libraries(
+        cuda_kabsch_test
+        PRIVATE
+            docking_cuda
+    )
 
 
 endif()

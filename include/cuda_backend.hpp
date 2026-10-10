@@ -83,4 +83,11 @@ void cuda_free_points(
     GpuPointArrayDevice& device_points
 );
 
+bool cuda_compute_kabsch_transforms(
+    const GpuPointArrayDevice& ligand_points,
+    const GpuPointArrayDevice& protein_points,
+    const std::vector<GpuAlignmentCandidate>& alignments,
+    std::vector<GpuRigidTransform>& transforms
+);
+
 #endif

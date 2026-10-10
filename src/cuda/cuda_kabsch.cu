@@ -1,0 +1,811 @@
+#include "cuda_backend.hpp"
+
+#include <cuda_runtime.h>
+#include <cusolverDn.h>
+
+#include <climits>
+#include <cstddef>
+#include <cstdint>
+
+
+namespace
+{
+
+__device__ double point_component(
+    const GpuPoint3& point,
+    int component
+)
+{
+    if (component == 0)
+        return point.x;
+
+    if (component == 1)
+        return point.y;
+
+    return point.z;
+}
+
+
+__global__ void prepare_kabsch_kernel(
+    const GpuPoint3* ligand_points,
+    const GpuPoint3* protein_points,
+    const GpuAlignmentCandidate* alignments,
+    std::uint32_t alignment_count,
+    double* covariance_matrices,
+    GpuPoint3* ligand_centroids,
+    GpuPoint3* protein_centroids
+)
+{
+    const std::uint32_t index =
+        blockIdx.x * blockDim.x +
+        threadIdx.x;
+
+
+    if (index >= alignment_count)
+        return;
+
+
+    const auto alignment =
+        alignments[index];
+
+
+    GpuPoint3 source[3];
+    GpuPoint3 target[3];
+
+
+    for (int i = 0; i < 3; ++i) {
+
+        source[i] =
+            ligand_points[
+                alignment.ligand_indices[i]
+            ];
+
+        target[i] =
+            protein_points[
+                alignment.protein_indices[i]
+            ];
+    }
+
+
+    GpuPoint3 source_centroid{};
+    GpuPoint3 target_centroid{};
+
+
+    for (int i = 0; i < 3; ++i) {
+
+        source_centroid.x +=
+            source[i].x;
+
+        source_centroid.y +=
+            source[i].y;
+
+        source_centroid.z +=
+            source[i].z;
+
+
+        target_centroid.x +=
+            target[i].x;
+
+        target_centroid.y +=
+            target[i].y;
+
+        target_centroid.z +=
+            target[i].z;
+    }
+
+
+    source_centroid.x /= 3.0;
+    source_centroid.y /= 3.0;
+    source_centroid.z /= 3.0;
+
+    target_centroid.x /= 3.0;
+    target_centroid.y /= 3.0;
+    target_centroid.z /= 3.0;
+
+
+    ligand_centroids[index] =
+        source_centroid;
+
+    protein_centroids[index] =
+        target_centroid;
+
+
+    /*
+     * H = Pc * Qc^T
+     *
+     * cuSOLVER expects each matrix
+     * in column-major storage.
+     */
+    double* H =
+        covariance_matrices +
+        static_cast<std::size_t>(index) * 9;
+
+
+    for (int row = 0; row < 3; ++row) {
+
+        for (int col = 0; col < 3; ++col) {
+
+            double value = 0.0;
+
+
+            for (int i = 0; i < 3; ++i) {
+
+                const double p =
+                    point_component(
+                        source[i],
+                        row
+                    ) -
+                    point_component(
+                        source_centroid,
+                        row
+                    );
+
+
+                const double q =
+                    point_component(
+                        target[i],
+                        col
+                    ) -
+                    point_component(
+                        target_centroid,
+                        col
+                    );
+
+
+                value += p * q;
+            }
+
+
+            H[
+                row +
+                3 * col
+            ] = value;
+        }
+    }
+}
+
+
+__device__ double matrix3_get(
+    const double* matrix,
+    int row,
+    int col
+)
+{
+    return matrix[
+        row +
+        3 * col
+    ];
+}
+
+
+__global__ void finalize_kabsch_kernel(
+    const double* U_matrices,
+    const double* V_matrices,
+    const int* info,
+    const GpuPoint3* ligand_centroids,
+    const GpuPoint3* protein_centroids,
+    std::uint32_t alignment_count,
+    GpuRigidTransform* transforms
+)
+{
+    const std::uint32_t index =
+        blockIdx.x * blockDim.x +
+        threadIdx.x;
+
+
+    if (index >= alignment_count)
+        return;
+
+
+    GpuRigidTransform output{};
+
+
+    if (info[index] != 0) {
+
+        output.valid = 0;
+
+        transforms[index] =
+            output;
+
+        return;
+    }
+
+
+    const double* U =
+        U_matrices +
+        static_cast<std::size_t>(index) * 9;
+
+    const double* V =
+        V_matrices +
+        static_cast<std::size_t>(index) * 9;
+
+
+    /*
+     * First compute
+     *
+     * M = V * U^T
+     *
+     * in order to determine whether
+     * reflection correction is required.
+     */
+
+    double M[9];
+
+
+    for (int row = 0; row < 3; ++row) {
+
+        for (int col = 0; col < 3; ++col) {
+
+            double value = 0.0;
+
+
+            for (int k = 0; k < 3; ++k) {
+
+                value +=
+                    matrix3_get(
+                        V,
+                        row,
+                        k
+                    ) *
+                    matrix3_get(
+                        U,
+                        col,
+                        k
+                    );
+            }
+
+
+            M[
+                row * 3 +
+                col
+            ] = value;
+        }
+    }
+
+
+    const double determinant =
+          M[0] * (
+              M[4] * M[8] -
+              M[5] * M[7]
+          )
+        - M[1] * (
+              M[3] * M[8] -
+              M[5] * M[6]
+          )
+        + M[2] * (
+              M[3] * M[7] -
+              M[4] * M[6]
+          );
+
+
+    const double d2 =
+        determinant < 0.0
+        ? -1.0
+        : 1.0;
+
+
+    /*
+     * R = V * D * U^T
+     *
+     * D = diag(1, 1, d2)
+     */
+    for (int row = 0; row < 3; ++row) {
+
+        for (int col = 0; col < 3; ++col) {
+
+            double value = 0.0;
+
+
+            for (int k = 0; k < 3; ++k) {
+
+                const double correction =
+                    (k == 2)
+                    ? d2
+                    : 1.0;
+
+
+                value +=
+                    matrix3_get(
+                        V,
+                        row,
+                        k
+                    ) *
+                    correction *
+                    matrix3_get(
+                        U,
+                        col,
+                        k
+                    );
+            }
+
+
+            output.rotation[
+                row * 3 +
+                col
+            ] = value;
+        }
+    }
+
+
+    const GpuPoint3 p =
+        ligand_centroids[index];
+
+    const GpuPoint3 q =
+        protein_centroids[index];
+
+
+    output.translation[0] =
+        q.x -
+        (
+            output.rotation[0] * p.x +
+            output.rotation[1] * p.y +
+            output.rotation[2] * p.z
+        );
+
+
+    output.translation[1] =
+        q.y -
+        (
+            output.rotation[3] * p.x +
+            output.rotation[4] * p.y +
+            output.rotation[5] * p.z
+        );
+
+
+    output.translation[2] =
+        q.z -
+        (
+            output.rotation[6] * p.x +
+            output.rotation[7] * p.y +
+            output.rotation[8] * p.z
+        );
+
+
+    output.valid = 1;
+
+
+    transforms[index] =
+        output;
+}
+
+} // namespace
+
+
+bool cuda_compute_kabsch_transforms(
+    const GpuPointArrayDevice& ligand_points,
+    const GpuPointArrayDevice& protein_points,
+    const std::vector<GpuAlignmentCandidate>& alignments,
+    std::vector<GpuRigidTransform>& transforms
+)
+{
+    transforms.clear();
+
+
+    if (alignments.empty())
+        return true;
+
+
+    if (
+        ligand_points.points == nullptr ||
+        protein_points.points == nullptr
+    ) {
+        return false;
+    }
+
+
+    if (
+        alignments.size() >
+        static_cast<std::size_t>(INT_MAX)
+    ) {
+        return false;
+    }
+
+
+    for (const auto& alignment :
+         alignments) {
+
+        for (int i = 0; i < 3; ++i) {
+
+            if (
+                alignment.ligand_indices[i] >=
+                    ligand_points.count ||
+                alignment.protein_indices[i] >=
+                    protein_points.count
+            ) {
+                return false;
+            }
+        }
+    }
+
+
+    const std::uint32_t alignment_count =
+        static_cast<std::uint32_t>(
+            alignments.size()
+        );
+
+
+    const int batch_size =
+        static_cast<int>(
+            alignments.size()
+        );
+
+
+    GpuAlignmentCandidate* device_alignments =
+        nullptr;
+
+    double* device_covariance =
+        nullptr;
+
+    double* device_singular_values =
+        nullptr;
+
+    double* device_u =
+        nullptr;
+
+    double* device_v =
+        nullptr;
+
+    double* device_work =
+        nullptr;
+
+    int* device_info =
+        nullptr;
+
+    GpuPoint3* device_ligand_centroids =
+        nullptr;
+
+    GpuPoint3* device_protein_centroids =
+        nullptr;
+
+    GpuRigidTransform* device_transforms =
+        nullptr;
+
+
+    cusolverDnHandle_t solver =
+        nullptr;
+
+    gesvdjInfo_t solver_params =
+        nullptr;
+
+
+    auto cleanup =
+        [&]()
+        {
+            cudaFree(
+                device_transforms
+            );
+
+            cudaFree(
+                device_protein_centroids
+            );
+
+            cudaFree(
+                device_ligand_centroids
+            );
+
+            cudaFree(
+                device_info
+            );
+
+            cudaFree(
+                device_work
+            );
+
+            cudaFree(
+                device_v
+            );
+
+            cudaFree(
+                device_u
+            );
+
+            cudaFree(
+                device_singular_values
+            );
+
+            cudaFree(
+                device_covariance
+            );
+
+            cudaFree(
+                device_alignments
+            );
+
+
+            if (solver_params != nullptr) {
+
+                cusolverDnDestroyGesvdjInfo(
+                    solver_params
+                );
+            }
+
+
+            if (solver != nullptr) {
+
+                cusolverDnDestroy(
+                    solver
+                );
+            }
+        };
+
+
+    const std::size_t alignment_bytes =
+        alignments.size() *
+        sizeof(GpuAlignmentCandidate);
+
+    const std::size_t matrix_bytes =
+        alignments.size() *
+        9 *
+        sizeof(double);
+
+    const std::size_t singular_bytes =
+        alignments.size() *
+        3 *
+        sizeof(double);
+
+    const std::size_t centroid_bytes =
+        alignments.size() *
+        sizeof(GpuPoint3);
+
+    const std::size_t info_bytes =
+        alignments.size() *
+        sizeof(int);
+
+    const std::size_t transform_bytes =
+        alignments.size() *
+        sizeof(GpuRigidTransform);
+
+
+    if (
+        cudaMalloc(
+            reinterpret_cast<void**>(
+                &device_alignments
+            ),
+            alignment_bytes
+        ) != cudaSuccess ||
+
+        cudaMalloc(
+            reinterpret_cast<void**>(
+                &device_covariance
+            ),
+            matrix_bytes
+        ) != cudaSuccess ||
+
+        cudaMalloc(
+            reinterpret_cast<void**>(
+                &device_singular_values
+            ),
+            singular_bytes
+        ) != cudaSuccess ||
+
+        cudaMalloc(
+            reinterpret_cast<void**>(
+                &device_u
+            ),
+            matrix_bytes
+        ) != cudaSuccess ||
+
+        cudaMalloc(
+            reinterpret_cast<void**>(
+                &device_v
+            ),
+            matrix_bytes
+        ) != cudaSuccess ||
+
+        cudaMalloc(
+            reinterpret_cast<void**>(
+                &device_info
+            ),
+            info_bytes
+        ) != cudaSuccess ||
+
+        cudaMalloc(
+            reinterpret_cast<void**>(
+                &device_ligand_centroids
+            ),
+            centroid_bytes
+        ) != cudaSuccess ||
+
+        cudaMalloc(
+            reinterpret_cast<void**>(
+                &device_protein_centroids
+            ),
+            centroid_bytes
+        ) != cudaSuccess ||
+
+        cudaMalloc(
+            reinterpret_cast<void**>(
+                &device_transforms
+            ),
+            transform_bytes
+        ) != cudaSuccess
+    ) {
+        cleanup();
+        return false;
+    }
+
+
+    if (
+        cudaMemcpy(
+            device_alignments,
+            alignments.data(),
+            alignment_bytes,
+            cudaMemcpyHostToDevice
+        ) != cudaSuccess
+    ) {
+        cleanup();
+        return false;
+    }
+
+
+    constexpr std::uint32_t block_size =
+        256;
+
+
+    const std::uint32_t block_count =
+        (
+            alignment_count +
+            block_size - 1
+        ) / block_size;
+
+
+    prepare_kabsch_kernel
+        <<<block_count, block_size>>>(
+            ligand_points.points,
+            protein_points.points,
+            device_alignments,
+            alignment_count,
+            device_covariance,
+            device_ligand_centroids,
+            device_protein_centroids
+        );
+
+
+    if (
+        cudaGetLastError() != cudaSuccess
+    ) {
+        cleanup();
+        return false;
+    }
+
+
+    if (
+        cusolverDnCreate(
+            &solver
+        ) != CUSOLVER_STATUS_SUCCESS
+    ) {
+        cleanup();
+        return false;
+    }
+
+
+    if (
+        cusolverDnCreateGesvdjInfo(
+            &solver_params
+        ) != CUSOLVER_STATUS_SUCCESS
+    ) {
+        cleanup();
+        return false;
+    }
+
+
+    constexpr int matrix_size = 3;
+
+
+    int work_size = 0;
+
+
+    if (
+        cusolverDnDgesvdjBatched_bufferSize(
+            solver,
+            CUSOLVER_EIG_MODE_VECTOR,
+            matrix_size,
+            matrix_size,
+            device_covariance,
+            matrix_size,
+            device_singular_values,
+            device_u,
+            matrix_size,
+            device_v,
+            matrix_size,
+            &work_size,
+            solver_params,
+            batch_size
+        ) != CUSOLVER_STATUS_SUCCESS
+    ) {
+        cleanup();
+        return false;
+    }
+
+
+    if (work_size > 0) {
+
+        if (
+            cudaMalloc(
+                reinterpret_cast<void**>(
+                    &device_work
+                ),
+                static_cast<std::size_t>(
+                    work_size
+                ) *
+                sizeof(double)
+            ) != cudaSuccess
+        ) {
+            cleanup();
+            return false;
+        }
+    }
+
+
+    if (
+        cusolverDnDgesvdjBatched(
+            solver,
+            CUSOLVER_EIG_MODE_VECTOR,
+            matrix_size,
+            matrix_size,
+            device_covariance,
+            matrix_size,
+            device_singular_values,
+            device_u,
+            matrix_size,
+            device_v,
+            matrix_size,
+            device_work,
+            work_size,
+            device_info,
+            solver_params,
+            batch_size
+        ) != CUSOLVER_STATUS_SUCCESS
+    ) {
+        cleanup();
+        return false;
+    }
+
+
+    finalize_kabsch_kernel
+        <<<block_count, block_size>>>(
+            device_u,
+            device_v,
+            device_info,
+            device_ligand_centroids,
+            device_protein_centroids,
+            alignment_count,
+            device_transforms
+        );
+
+
+    if (
+        cudaGetLastError() != cudaSuccess ||
+        cudaDeviceSynchronize() != cudaSuccess
+    ) {
+        cleanup();
+        return false;
+    }
+
+
+    transforms.resize(
+        alignments.size()
+    );
+
+
+    if (
+        cudaMemcpy(
+            transforms.data(),
+            device_transforms,
+            transform_bytes,
+            cudaMemcpyDeviceToHost
+        ) != cudaSuccess
+    ) {
+        transforms.clear();
+
+        cleanup();
+
+        return false;
+    }
+
+
+    cleanup();
+
+
+    return true;
+}
