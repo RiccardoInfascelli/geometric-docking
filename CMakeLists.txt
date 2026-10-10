@@ -58,6 +58,7 @@ add_library(
     src/benchmark_csv.cpp
     src/cuda/cuda_triplet_index.cpp
     src/cuda/cuda_geometry.cpp
+    src/cuda/cuda_grid.cpp
 )
 
 target_include_directories(
@@ -169,6 +170,17 @@ if(ENABLE_CUDA)
 
 
 endif()
+
+add_executable(
+    gpu_grid_test
+    apps/gpu_grid_test.cpp
+)
+
+target_link_libraries(
+    gpu_grid_test
+    PRIVATE
+        docking_core
+)
 
 add_executable(
     gpu_triplet_index_test
