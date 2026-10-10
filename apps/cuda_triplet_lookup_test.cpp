@@ -1,5 +1,6 @@
 #include "cuda_backend.hpp"
 
+#include <cstdint>
 #include <iostream>
 #include <vector>
 
@@ -38,9 +39,20 @@ int main()
 
 
     host_index.keys = {
-        make_key(0, 1, 2, 1, 2, 3),
-        make_key(0, 1, 2, 4, 5, 6),
-        make_key(1, 2, 3, 7, 8, 9)
+        make_key(
+            0, 1, 2,
+            1, 2, 3
+        ),
+
+        make_key(
+            0, 1, 2,
+            4, 5, 6
+        ),
+
+        make_key(
+            1, 2, 3,
+            7, 8, 9
+        )
     };
 
 
@@ -62,6 +74,10 @@ int main()
     GpuFlatTripletIndexDevice device_index;
 
 
+    // ========================================================
+    // Upload
+    // ========================================================
+
     if (
         !cuda_upload_triplet_index(
             host_index,
@@ -75,51 +91,58 @@ int main()
     }
 
 
-    const std::vector<GpuTripletKey> queries = {
-        host_index.keys[0],
-        host_index.keys[2],
+    // ========================================================
+    // Exact lookup test
+    // ========================================================
 
-        make_key(
-            0, 1, 2,
-            100, 100, 100
-        )
-    };
+    const std::vector<GpuTripletKey>
+        exact_queries = {
+
+            host_index.keys[0],
+            host_index.keys[2],
+
+            make_key(
+                0, 1, 2,
+                100, 100, 100
+            )
+        };
 
 
-    std::vector<std::uint32_t> results;
+    std::vector<std::uint32_t>
+        exact_results;
 
 
-    const bool lookup_ok =
-        cuda_lookup_triplet_keys_exact(
+    if (
+        !cuda_lookup_triplet_keys_exact(
             device_index,
-            queries,
-            results
-        );
-
-
-    cuda_free_triplet_index(
-        device_index
-    );
-
-
-    if (!lookup_ok) {
-
+            exact_queries,
+            exact_results
+        )
+    ) {
         std::cerr
             << "Exact CUDA lookup failed\n";
+
+        cuda_free_triplet_index(
+            device_index
+        );
 
         return 1;
     }
 
 
     if (
-        results.size() != 3 ||
-        results[0] != 0 ||
-        results[1] != 2 ||
-        results[2] !=
+        exact_results.size() != 3 ||
+        exact_results[0] != 0 ||
+        exact_results[1] != 2 ||
+        exact_results[2] !=
             GPU_TRIPLET_KEY_NOT_FOUND
     ) {
         std::cerr
-            << "Unexpected lookup results\n";
+            << "Unexpected exact lookup results\n";
+
+        cuda_free_triplet_index(
+            device_index
+        );
 
         return 1;
     }
@@ -127,6 +150,105 @@ int main()
 
     std::cout
         << "CUDA exact triplet lookup passed\n";
+
+
+    // ========================================================
+    // 27-neighbor lookup test
+    // ========================================================
+
+    const std::vector<GpuTripletKey>
+        neighbor_queries = {
+
+            make_key(
+                0, 1, 2,
+                4, 5, 6
+            )
+        };
+
+
+    std::vector<std::uint32_t>
+        neighbor_results;
+
+
+    if (
+        !cuda_lookup_triplet_key_neighbors(
+            device_index,
+            neighbor_queries,
+            neighbor_results
+        )
+    ) {
+        std::cerr
+            << "CUDA neighbor lookup failed\n";
+
+        cuda_free_triplet_index(
+            device_index
+        );
+
+        return 1;
+    }
+
+
+    if (
+        neighbor_results.size() != 27
+    ) {
+        std::cerr
+            << "Unexpected neighbor result count: "
+            << neighbor_results.size()
+            << '\n';
+
+        cuda_free_triplet_index(
+            device_index
+        );
+
+        return 1;
+    }
+
+
+    bool found_exact_key = false;
+
+
+    for (
+        const auto key_index :
+        neighbor_results
+    ) {
+        if (key_index == 1) {
+
+            found_exact_key = true;
+            break;
+        }
+    }
+
+
+    if (!found_exact_key) {
+
+        std::cerr
+            << "Exact key missing from "
+               "27-neighbor lookup\n";
+
+        cuda_free_triplet_index(
+            device_index
+        );
+
+        return 1;
+    }
+
+
+    std::cout
+        << "CUDA 27-neighbor triplet lookup passed\n";
+
+
+    // ========================================================
+    // Cleanup
+    // ========================================================
+
+    cuda_free_triplet_index(
+        device_index
+    );
+
+
+    std::cout
+        << "CUDA triplet lookup tests passed\n";
+
 
     return 0;
 }

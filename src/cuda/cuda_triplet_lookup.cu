@@ -111,6 +111,92 @@ __global__ void triplet_exact_lookup_kernel(
         );
 }
 
+__global__ void triplet_neighbor_lookup_kernel(
+    const GpuTripletKey* index_keys,
+    std::uint32_t index_key_count,
+    const GpuTripletKey* queries,
+    std::uint32_t query_count,
+    std::uint32_t* results
+)
+{
+    const std::uint32_t query_index =
+        blockIdx.x * blockDim.x +
+        threadIdx.x;
+
+    if (query_index >= query_count)
+        return;
+
+
+    const GpuTripletKey base =
+        queries[query_index];
+
+
+    std::uint32_t slot = 0;
+
+
+    for (int d0 = -1; d0 <= 1; ++d0) {
+        for (int d1 = -1; d1 <= 1; ++d1) {
+            for (int d2 = -1; d2 <= 1; ++d2) {
+
+                GpuTripletKey candidate =
+                    base;
+
+
+                const int deltas[3] = {
+                    d0,
+                    d1,
+                    d2
+                };
+
+
+                bool valid = true;
+
+
+                for (int i = 0; i < 3; ++i) {
+
+                    if (
+                        deltas[i] < 0 &&
+                        candidate.distance_bins[i] == 0
+                    ) {
+                        valid = false;
+                        break;
+                    }
+
+
+                    candidate.distance_bins[i] =
+                        static_cast<std::uint32_t>(
+                            static_cast<std::int64_t>(
+                                candidate.distance_bins[i]
+                            ) +
+                            deltas[i]
+                        );
+                }
+
+
+                const std::uint32_t output_index =
+                    query_index * 27 + slot;
+
+
+                if (valid) {
+                    results[output_index] =
+                        find_triplet_key(
+                            index_keys,
+                            index_key_count,
+                            candidate
+                        );
+                }
+                else {
+                    results[output_index] =
+                        GPU_TRIPLET_KEY_NOT_FOUND;
+                }
+
+
+                ++slot;
+            }
+        }
+    }
+}
+
 } // namespace
 
 
@@ -254,6 +340,169 @@ bool cuda_lookup_triplet_keys_exact(
         ) != cudaSuccess
     ) {
         key_indices.clear();
+
+        cudaFree(device_results);
+        cudaFree(device_queries);
+
+        return false;
+    }
+
+
+    cudaFree(device_results);
+    cudaFree(device_queries);
+
+
+    return true;
+}
+
+bool cuda_lookup_triplet_key_neighbors(
+    const GpuFlatTripletIndexDevice& device_index,
+    const std::vector<GpuTripletKey>& queries,
+    std::vector<std::uint32_t>& neighbor_key_indices
+)
+{
+    neighbor_key_indices.clear();
+
+
+    if (queries.empty())
+        return true;
+
+
+    if (
+        queries.size() >
+        std::numeric_limits<std::uint32_t>::max()
+    ) {
+        return false;
+    }
+
+
+    if (
+        device_index.key_count > 0 &&
+        device_index.keys == nullptr
+    ) {
+        return false;
+    }
+
+
+    GpuTripletKey* device_queries =
+        nullptr;
+
+    std::uint32_t* device_results =
+        nullptr;
+
+
+    const std::size_t result_count =
+        queries.size() * 27;
+
+
+    const std::size_t query_bytes =
+        queries.size() *
+        sizeof(GpuTripletKey);
+
+    const std::size_t result_bytes =
+        result_count *
+        sizeof(std::uint32_t);
+
+
+    if (
+        cudaMalloc(
+            reinterpret_cast<void**>(
+                &device_queries
+            ),
+            query_bytes
+        ) != cudaSuccess
+    ) {
+        return false;
+    }
+
+
+    if (
+        cudaMalloc(
+            reinterpret_cast<void**>(
+                &device_results
+            ),
+            result_bytes
+        ) != cudaSuccess
+    ) {
+        cudaFree(device_queries);
+        return false;
+    }
+
+
+    if (
+        cudaMemcpy(
+            device_queries,
+            queries.data(),
+            query_bytes,
+            cudaMemcpyHostToDevice
+        ) != cudaSuccess
+    ) {
+        cudaFree(device_results);
+        cudaFree(device_queries);
+
+        return false;
+    }
+
+
+    constexpr std::uint32_t block_size =
+        256;
+
+
+    const std::uint32_t query_count =
+        static_cast<std::uint32_t>(
+            queries.size()
+        );
+
+
+    const std::uint32_t block_count =
+        (
+            query_count +
+            block_size - 1
+        ) / block_size;
+
+
+    triplet_neighbor_lookup_kernel
+        <<<block_count, block_size>>>(
+            device_index.keys,
+            device_index.key_count,
+            device_queries,
+            query_count,
+            device_results
+        );
+
+
+    if (cudaGetLastError() != cudaSuccess) {
+
+        cudaFree(device_results);
+        cudaFree(device_queries);
+
+        return false;
+    }
+
+
+    if (cudaDeviceSynchronize() != cudaSuccess) {
+
+        cudaFree(device_results);
+        cudaFree(device_queries);
+
+        return false;
+    }
+
+
+    neighbor_key_indices.resize(
+        result_count
+    );
+
+
+    if (
+        cudaMemcpy(
+            neighbor_key_indices.data(),
+            device_results,
+            result_bytes,
+            cudaMemcpyDeviceToHost
+        ) != cudaSuccess
+    ) {
+        neighbor_key_indices.clear();
 
         cudaFree(device_results);
         cudaFree(device_queries);

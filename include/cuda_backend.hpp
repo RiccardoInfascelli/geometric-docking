@@ -31,5 +31,11 @@ bool cuda_lookup_triplet_keys_exact(
     std::vector<std::uint32_t>& key_indices
 );
 
+bool cuda_lookup_triplet_key_neighbors(
+    const GpuFlatTripletIndexDevice& device_index,
+    const std::vector<GpuTripletKey>& queries,
+    std::vector<std::uint32_t>& neighbor_key_indices
+);
+
 
 #endif
