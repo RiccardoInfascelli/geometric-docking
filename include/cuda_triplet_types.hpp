@@ -61,5 +61,20 @@ static_assert(
     sizeof(GpuProteinTripletRecord) == 12
 );
 
+struct GpuTripletCandidate
+{
+    std::uint32_t ligand_triplet_index{};
+    std::uint32_t protein_indices[3]{};
+};
+
+static_assert(
+    std::is_trivially_copyable_v<
+        GpuTripletCandidate
+    >
+);
+
+static_assert(
+    sizeof(GpuTripletCandidate) == 16
+);
 
 #endif

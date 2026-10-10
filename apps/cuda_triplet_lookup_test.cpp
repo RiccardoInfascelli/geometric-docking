@@ -104,7 +104,7 @@ int main()
 
 
     // ========================================================
-    // Exact lookup test
+    // Exact lookup
     // ========================================================
 
     const std::vector<GpuTripletKey>
@@ -165,7 +165,7 @@ int main()
 
 
     // ========================================================
-    // 27-neighbor lookup test
+    // 27-neighbor lookup
     // ========================================================
 
     const std::vector<GpuTripletKey>
@@ -204,9 +204,7 @@ int main()
         neighbor_results.size() != 27
     ) {
         std::cerr
-            << "Unexpected neighbor result count: "
-            << neighbor_results.size()
-            << '\n';
+            << "Unexpected neighbor result count\n";
 
         cuda_free_triplet_index(
             device_index
@@ -219,12 +217,10 @@ int main()
     bool found_exact_key = false;
 
 
-    for (
-        const auto key_index :
-        neighbor_results
-    ) {
-        if (key_index == 1) {
+    for (const auto key_index :
+         neighbor_results) {
 
+        if (key_index == 1) {
             found_exact_key = true;
             break;
         }
@@ -250,44 +246,22 @@ int main()
 
 
     // ========================================================
-    // Neighbor record counting test
+    // Record counting
     // ========================================================
 
     const std::vector<GpuTripletKey>
         count_queries = {
 
-            /*
-             * Neighbor of key 0.
-             *
-             * Query bins:
-             *     2, 3, 4
-             *
-             * key 0 bins:
-             *     1, 2, 3
-             *
-             * Therefore key 0 is found using
-             * delta (-1, -1, -1).
-             *
-             * key 0 contains 2 records.
-             */
             make_key(
                 0, 1, 2,
                 2, 3, 4
             ),
 
-            /*
-             * Exact match with key 1.
-             *
-             * key 1 contains 1 record.
-             */
             make_key(
                 0, 1, 2,
                 4, 5, 6
             ),
 
-            /*
-             * No matching chemical key.
-             */
             make_key(
                 9, 9, 9,
                 4, 5, 6
@@ -326,17 +300,6 @@ int main()
         std::cerr
             << "Unexpected neighbor record counts\n";
 
-
-        if (record_counts.size() == 3) {
-
-            std::cerr
-                << "Got: "
-                << record_counts[0] << ", "
-                << record_counts[1] << ", "
-                << record_counts[2] << '\n';
-        }
-
-
         cuda_free_triplet_index(
             device_index
         );
@@ -350,26 +313,17 @@ int main()
 
 
     // ========================================================
-    // Prefix-sum test
+    // Prefix sum
     // ========================================================
 
-    const std::vector<std::uint32_t>
-        counts = {
-            2,
-            1,
-            0,
-            4
-        };
-
-
     std::vector<std::uint32_t>
-        offsets;
+        candidate_offsets;
 
 
     if (
         !cuda_exclusive_prefix_sum(
-            counts,
-            offsets
+            record_counts,
+            candidate_offsets
         )
     ) {
         std::cerr
@@ -388,30 +342,16 @@ int main()
             0,
             2,
             3,
-            3,
-            7
+            3
         };
 
 
     if (
-        offsets != expected_offsets
+        candidate_offsets !=
+        expected_offsets
     ) {
         std::cerr
             << "Unexpected CUDA prefix-sum result\n";
-
-
-        std::cerr
-            << "Got: ";
-
-        for (const auto value : offsets) {
-            std::cerr
-                << value
-                << ' ';
-        }
-
-        std::cerr
-            << '\n';
-
 
         cuda_free_triplet_index(
             device_index
@@ -423,6 +363,103 @@ int main()
 
     std::cout
         << "CUDA prefix sum passed\n";
+
+
+    // ========================================================
+    // Candidate expansion
+    // ========================================================
+
+    std::vector<GpuTripletCandidate>
+        candidates;
+
+
+    if (
+        !cuda_expand_triplet_neighbor_records(
+            device_index,
+            count_queries,
+            candidate_offsets,
+            candidates
+        )
+    ) {
+        std::cerr
+            << "CUDA candidate expansion failed\n";
+
+        cuda_free_triplet_index(
+            device_index
+        );
+
+        return 1;
+    }
+
+
+    if (candidates.size() != 3) {
+
+        std::cerr
+            << "Unexpected candidate count: "
+            << candidates.size()
+            << '\n';
+
+        cuda_free_triplet_index(
+            device_index
+        );
+
+        return 1;
+    }
+
+
+    if (
+        candidates[0].ligand_triplet_index != 0 ||
+        candidates[0].protein_indices[0] != 0 ||
+        candidates[0].protein_indices[1] != 1 ||
+        candidates[0].protein_indices[2] != 2
+    ) {
+        std::cerr
+            << "Unexpected candidate 0\n";
+
+        cuda_free_triplet_index(
+            device_index
+        );
+
+        return 1;
+    }
+
+
+    if (
+        candidates[1].ligand_triplet_index != 0 ||
+        candidates[1].protein_indices[0] != 10 ||
+        candidates[1].protein_indices[1] != 11 ||
+        candidates[1].protein_indices[2] != 12
+    ) {
+        std::cerr
+            << "Unexpected candidate 1\n";
+
+        cuda_free_triplet_index(
+            device_index
+        );
+
+        return 1;
+    }
+
+
+    if (
+        candidates[2].ligand_triplet_index != 1 ||
+        candidates[2].protein_indices[0] != 3 ||
+        candidates[2].protein_indices[1] != 4 ||
+        candidates[2].protein_indices[2] != 5
+    ) {
+        std::cerr
+            << "Unexpected candidate 2\n";
+
+        cuda_free_triplet_index(
+            device_index
+        );
+
+        return 1;
+    }
+
+
+    std::cout
+        << "CUDA candidate expansion passed\n";
 
 
     // ========================================================

@@ -48,4 +48,11 @@ bool cuda_exclusive_prefix_sum(
     std::vector<std::uint32_t>& offsets
 );
 
+bool cuda_expand_triplet_neighbor_records(
+    const GpuFlatTripletIndexDevice& device_index,
+    const std::vector<GpuTripletKey>& queries,
+    const std::vector<std::uint32_t>& candidate_offsets,
+    std::vector<GpuTripletCandidate>& candidates
+);
+
 #endif
