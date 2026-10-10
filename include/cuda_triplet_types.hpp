@@ -77,4 +77,38 @@ static_assert(
     sizeof(GpuTripletCandidate) == 16
 );
 
+struct GpuLigandTripletOrders
+{
+    std::uint32_t equivalent_order_count{};
+    std::uint32_t equivalent_orders[6][3]{};
+};
+
+
+struct GpuAlignmentCandidate
+{
+    std::uint32_t ligand_indices[3]{};
+    std::uint32_t protein_indices[3]{};
+};
+
+
+static_assert(
+    std::is_trivially_copyable_v<
+        GpuLigandTripletOrders
+    >
+);
+
+static_assert(
+    std::is_trivially_copyable_v<
+        GpuAlignmentCandidate
+    >
+);
+
+static_assert(
+    sizeof(GpuLigandTripletOrders) == 76
+);
+
+static_assert(
+    sizeof(GpuAlignmentCandidate) == 24
+);
+
 #endif

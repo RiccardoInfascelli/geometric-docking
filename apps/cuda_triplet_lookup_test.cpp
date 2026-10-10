@@ -461,6 +461,260 @@ int main()
     std::cout
         << "CUDA candidate expansion passed\n";
 
+    // ========================================================
+    // Equivalent ligand orders
+    // ========================================================
+
+    std::vector<GpuLigandTripletOrders>
+        ligand_orders(3);
+
+
+    /*
+    * Ligand triplet 0 has two equivalent orders.
+    */
+    ligand_orders[0].equivalent_order_count = 2;
+
+    ligand_orders[0].equivalent_orders[0][0] = 100;
+    ligand_orders[0].equivalent_orders[0][1] = 101;
+    ligand_orders[0].equivalent_orders[0][2] = 102;
+
+    ligand_orders[0].equivalent_orders[1][0] = 102;
+    ligand_orders[0].equivalent_orders[1][1] = 101;
+    ligand_orders[0].equivalent_orders[1][2] = 100;
+
+
+    /*
+    * Ligand triplet 1 has one equivalent order.
+    */
+    ligand_orders[1].equivalent_order_count = 1;
+
+    ligand_orders[1].equivalent_orders[0][0] = 200;
+    ligand_orders[1].equivalent_orders[0][1] = 201;
+    ligand_orders[1].equivalent_orders[0][2] = 202;
+
+
+    /*
+    * Ligand triplet 2 has no receptor match,
+    * but keep one valid order for completeness.
+    */
+    ligand_orders[2].equivalent_order_count = 1;
+
+    ligand_orders[2].equivalent_orders[0][0] = 300;
+    ligand_orders[2].equivalent_orders[0][1] = 301;
+    ligand_orders[2].equivalent_orders[0][2] = 302;
+
+
+    /*
+    * candidates currently are:
+    *
+    * candidate 0 -> ligand triplet 0
+    * candidate 1 -> ligand triplet 0
+    * candidate 2 -> ligand triplet 1
+    *
+    * Therefore:
+    *
+    * counts = [2, 2, 1]
+    */
+    std::vector<std::uint32_t>
+        alignment_counts;
+
+
+    if (
+        !cuda_count_alignment_candidates(
+            candidates,
+            ligand_orders,
+            alignment_counts
+        )
+    ) {
+        std::cerr
+            << "CUDA alignment candidate counting failed\n";
+
+        cuda_free_triplet_index(
+            device_index
+        );
+
+        return 1;
+    }
+
+
+    const std::vector<std::uint32_t>
+        expected_alignment_counts = {
+            2,
+            2,
+            1
+        };
+
+
+    if (
+        alignment_counts !=
+        expected_alignment_counts
+    ) {
+        std::cerr
+            << "Unexpected alignment candidate counts\n";
+
+        cuda_free_triplet_index(
+            device_index
+        );
+
+        return 1;
+    }
+
+
+    std::vector<std::uint32_t>
+        alignment_offsets;
+
+
+    if (
+        !cuda_exclusive_prefix_sum(
+            alignment_counts,
+            alignment_offsets
+        )
+    ) {
+        std::cerr
+            << "CUDA alignment prefix sum failed\n";
+
+        cuda_free_triplet_index(
+            device_index
+        );
+
+        return 1;
+    }
+
+
+    const std::vector<std::uint32_t>
+        expected_alignment_offsets = {
+            0,
+            2,
+            4,
+            5
+        };
+
+
+    if (
+        alignment_offsets !=
+        expected_alignment_offsets
+    ) {
+        std::cerr
+            << "Unexpected alignment offsets\n";
+
+        cuda_free_triplet_index(
+            device_index
+        );
+
+        return 1;
+    }
+
+
+    std::vector<GpuAlignmentCandidate>
+        alignments;
+
+
+    if (
+        !cuda_expand_alignment_candidates(
+            candidates,
+            ligand_orders,
+            alignment_offsets,
+            alignments
+        )
+    ) {
+        std::cerr
+            << "CUDA alignment expansion failed\n";
+
+        cuda_free_triplet_index(
+            device_index
+        );
+
+        return 1;
+    }
+
+
+    if (alignments.size() != 5) {
+
+        std::cerr
+            << "Unexpected alignment count: "
+            << alignments.size()
+            << '\n';
+
+        cuda_free_triplet_index(
+            device_index
+        );
+
+        return 1;
+    }
+
+
+    /*
+    * First receptor candidate,
+    * first ligand order.
+    */
+    if (
+        alignments[0].ligand_indices[0] != 100 ||
+        alignments[0].ligand_indices[1] != 101 ||
+        alignments[0].ligand_indices[2] != 102 ||
+        alignments[0].protein_indices[0] != 0 ||
+        alignments[0].protein_indices[1] != 1 ||
+        alignments[0].protein_indices[2] != 2
+    ) {
+        std::cerr
+            << "Unexpected alignment 0\n";
+
+        cuda_free_triplet_index(
+            device_index
+        );
+
+        return 1;
+    }
+
+
+    /*
+    * First receptor candidate,
+    * second ligand order.
+    */
+    if (
+        alignments[1].ligand_indices[0] != 102 ||
+        alignments[1].ligand_indices[1] != 101 ||
+        alignments[1].ligand_indices[2] != 100 ||
+        alignments[1].protein_indices[0] != 0 ||
+        alignments[1].protein_indices[1] != 1 ||
+        alignments[1].protein_indices[2] != 2
+    ) {
+        std::cerr
+            << "Unexpected alignment 1\n";
+
+        cuda_free_triplet_index(
+            device_index
+        );
+
+        return 1;
+    }
+
+
+    /*
+    * Third receptor candidate belongs to
+    * ligand triplet 1.
+    */
+    if (
+        alignments[4].ligand_indices[0] != 200 ||
+        alignments[4].ligand_indices[1] != 201 ||
+        alignments[4].ligand_indices[2] != 202 ||
+        alignments[4].protein_indices[0] != 3 ||
+        alignments[4].protein_indices[1] != 4 ||
+        alignments[4].protein_indices[2] != 5
+    ) {
+        std::cerr
+            << "Unexpected alignment 4\n";
+
+        cuda_free_triplet_index(
+            device_index
+        );
+
+        return 1;
+    }
+
+
+    std::cout
+        << "CUDA equivalent-order expansion passed\n";
+
 
     // ========================================================
     // Cleanup

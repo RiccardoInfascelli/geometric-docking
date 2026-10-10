@@ -55,4 +55,18 @@ bool cuda_expand_triplet_neighbor_records(
     std::vector<GpuTripletCandidate>& candidates
 );
 
+bool cuda_count_alignment_candidates(
+    const std::vector<GpuTripletCandidate>& candidates,
+    const std::vector<GpuLigandTripletOrders>& ligand_orders,
+    std::vector<std::uint32_t>& alignment_counts
+);
+
+
+bool cuda_expand_alignment_candidates(
+    const std::vector<GpuTripletCandidate>& candidates,
+    const std::vector<GpuLigandTripletOrders>& ligand_orders,
+    const std::vector<std::uint32_t>& alignment_offsets,
+    std::vector<GpuAlignmentCandidate>& alignments
+);
+
 #endif

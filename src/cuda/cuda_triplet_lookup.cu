@@ -439,6 +439,91 @@ __global__ void triplet_neighbor_expand_kernel(
     }
 }
 
+__global__ void alignment_candidate_count_kernel(
+    const GpuTripletCandidate* candidates,
+    std::uint32_t candidate_count,
+    const GpuLigandTripletOrders* ligand_orders,
+    std::uint32_t* alignment_counts
+)
+{
+    const std::uint32_t candidate_index =
+        blockIdx.x * blockDim.x +
+        threadIdx.x;
+
+
+    if (candidate_index >= candidate_count)
+        return;
+
+
+    const std::uint32_t ligand_triplet_index =
+        candidates[candidate_index]
+            .ligand_triplet_index;
+
+
+    alignment_counts[candidate_index] =
+        ligand_orders[ligand_triplet_index]
+            .equivalent_order_count;
+}
+
+
+__global__ void alignment_candidate_expand_kernel(
+    const GpuTripletCandidate* candidates,
+    std::uint32_t candidate_count,
+    const GpuLigandTripletOrders* ligand_orders,
+    const std::uint32_t* alignment_offsets,
+    GpuAlignmentCandidate* alignments
+)
+{
+    const std::uint32_t candidate_index =
+        blockIdx.x * blockDim.x +
+        threadIdx.x;
+
+
+    if (candidate_index >= candidate_count)
+        return;
+
+
+    const GpuTripletCandidate candidate =
+        candidates[candidate_index];
+
+
+    const GpuLigandTripletOrders orders =
+        ligand_orders[
+            candidate.ligand_triplet_index
+        ];
+
+
+    const std::uint32_t output_begin =
+        alignment_offsets[candidate_index];
+
+
+    for (
+        std::uint32_t order_index = 0;
+        order_index <
+            orders.equivalent_order_count;
+        ++order_index
+    ) {
+        GpuAlignmentCandidate output{};
+
+
+        for (int i = 0; i < 3; ++i) {
+
+            output.ligand_indices[i] =
+                orders.equivalent_orders[
+                    order_index
+                ][i];
+
+            output.protein_indices[i] =
+                candidate.protein_indices[i];
+        }
+
+
+        alignments[
+            output_begin + order_index
+        ] = output;
+    }
+}
+
 } // namespace
 
 
@@ -1371,6 +1456,466 @@ bool cuda_expand_triplet_neighbor_records(
     cudaFree(device_candidates);
     cudaFree(device_candidate_offsets);
     cudaFree(device_queries);
+
+
+    return true;
+}
+
+
+bool cuda_count_alignment_candidates(
+    const std::vector<GpuTripletCandidate>& candidates,
+    const std::vector<GpuLigandTripletOrders>& ligand_orders,
+    std::vector<std::uint32_t>& alignment_counts
+)
+{
+    alignment_counts.clear();
+
+
+    if (candidates.empty())
+        return true;
+
+
+    if (
+        candidates.size() >
+            std::numeric_limits<std::uint32_t>::max() ||
+        ligand_orders.size() >
+            std::numeric_limits<std::uint32_t>::max()
+    ) {
+        return false;
+    }
+
+
+    for (const auto& orders :
+         ligand_orders) {
+
+        if (
+            orders.equivalent_order_count > 6
+        ) {
+            return false;
+        }
+    }
+
+
+    for (const auto& candidate :
+         candidates) {
+
+        if (
+            candidate.ligand_triplet_index >=
+            ligand_orders.size()
+        ) {
+            return false;
+        }
+    }
+
+
+    GpuTripletCandidate* device_candidates =
+        nullptr;
+
+    GpuLigandTripletOrders* device_orders =
+        nullptr;
+
+    std::uint32_t* device_counts =
+        nullptr;
+
+
+    const std::size_t candidate_bytes =
+        candidates.size() *
+        sizeof(GpuTripletCandidate);
+
+    const std::size_t order_bytes =
+        ligand_orders.size() *
+        sizeof(GpuLigandTripletOrders);
+
+    const std::size_t count_bytes =
+        candidates.size() *
+        sizeof(std::uint32_t);
+
+
+    if (
+        cudaMalloc(
+            reinterpret_cast<void**>(
+                &device_candidates
+            ),
+            candidate_bytes
+        ) != cudaSuccess
+    ) {
+        return false;
+    }
+
+
+    if (
+        cudaMalloc(
+            reinterpret_cast<void**>(
+                &device_orders
+            ),
+            order_bytes
+        ) != cudaSuccess
+    ) {
+        cudaFree(device_candidates);
+        return false;
+    }
+
+
+    if (
+        cudaMalloc(
+            reinterpret_cast<void**>(
+                &device_counts
+            ),
+            count_bytes
+        ) != cudaSuccess
+    ) {
+        cudaFree(device_orders);
+        cudaFree(device_candidates);
+        return false;
+    }
+
+
+    if (
+        cudaMemcpy(
+            device_candidates,
+            candidates.data(),
+            candidate_bytes,
+            cudaMemcpyHostToDevice
+        ) != cudaSuccess ||
+        cudaMemcpy(
+            device_orders,
+            ligand_orders.data(),
+            order_bytes,
+            cudaMemcpyHostToDevice
+        ) != cudaSuccess
+    ) {
+        cudaFree(device_counts);
+        cudaFree(device_orders);
+        cudaFree(device_candidates);
+
+        return false;
+    }
+
+
+    const std::uint32_t candidate_count =
+        static_cast<std::uint32_t>(
+            candidates.size()
+        );
+
+
+    constexpr std::uint32_t block_size =
+        256;
+
+    const std::uint32_t block_count =
+        (
+            candidate_count +
+            block_size - 1
+        ) / block_size;
+
+
+    alignment_candidate_count_kernel
+        <<<block_count, block_size>>>(
+            device_candidates,
+            candidate_count,
+            device_orders,
+            device_counts
+        );
+
+
+    if (
+        cudaGetLastError() != cudaSuccess ||
+        cudaDeviceSynchronize() != cudaSuccess
+    ) {
+        cudaFree(device_counts);
+        cudaFree(device_orders);
+        cudaFree(device_candidates);
+
+        return false;
+    }
+
+
+    alignment_counts.resize(
+        candidates.size()
+    );
+
+
+    if (
+        cudaMemcpy(
+            alignment_counts.data(),
+            device_counts,
+            count_bytes,
+            cudaMemcpyDeviceToHost
+        ) != cudaSuccess
+    ) {
+        alignment_counts.clear();
+
+        cudaFree(device_counts);
+        cudaFree(device_orders);
+        cudaFree(device_candidates);
+
+        return false;
+    }
+
+
+    cudaFree(device_counts);
+    cudaFree(device_orders);
+    cudaFree(device_candidates);
+
+
+    return true;
+}
+
+
+bool cuda_expand_alignment_candidates(
+    const std::vector<GpuTripletCandidate>& candidates,
+    const std::vector<GpuLigandTripletOrders>& ligand_orders,
+    const std::vector<std::uint32_t>& alignment_offsets,
+    std::vector<GpuAlignmentCandidate>& alignments
+)
+{
+    alignments.clear();
+
+
+    if (
+        alignment_offsets.size() !=
+        candidates.size() + 1
+    ) {
+        return false;
+    }
+
+
+    if (candidates.empty()) {
+
+        return (
+            alignment_offsets.size() == 1 &&
+            alignment_offsets[0] == 0
+        );
+    }
+
+
+    for (
+        std::size_t i = 0;
+        i < candidates.size();
+        ++i
+    ) {
+        const auto ligand_index =
+            candidates[i]
+                .ligand_triplet_index;
+
+
+        if (
+            ligand_index >=
+            ligand_orders.size()
+        ) {
+            return false;
+        }
+
+
+        const std::uint32_t expected =
+            ligand_orders[ligand_index]
+                .equivalent_order_count;
+
+
+        if (expected > 6)
+            return false;
+
+
+        if (
+            alignment_offsets[i + 1] -
+            alignment_offsets[i] !=
+            expected
+        ) {
+            return false;
+        }
+    }
+
+
+    const std::uint32_t total_alignments =
+        alignment_offsets.back();
+
+
+    if (total_alignments == 0)
+        return true;
+
+
+    GpuTripletCandidate* device_candidates =
+        nullptr;
+
+    GpuLigandTripletOrders* device_orders =
+        nullptr;
+
+    std::uint32_t* device_offsets =
+        nullptr;
+
+    GpuAlignmentCandidate* device_alignments =
+        nullptr;
+
+
+    const std::size_t candidate_bytes =
+        candidates.size() *
+        sizeof(GpuTripletCandidate);
+
+    const std::size_t order_bytes =
+        ligand_orders.size() *
+        sizeof(GpuLigandTripletOrders);
+
+    const std::size_t offset_bytes =
+        alignment_offsets.size() *
+        sizeof(std::uint32_t);
+
+    const std::size_t alignment_bytes =
+        static_cast<std::size_t>(
+            total_alignments
+        ) *
+        sizeof(GpuAlignmentCandidate);
+
+
+    if (
+        cudaMalloc(
+            reinterpret_cast<void**>(
+                &device_candidates
+            ),
+            candidate_bytes
+        ) != cudaSuccess
+    ) {
+        return false;
+    }
+
+
+    if (
+        cudaMalloc(
+            reinterpret_cast<void**>(
+                &device_orders
+            ),
+            order_bytes
+        ) != cudaSuccess
+    ) {
+        cudaFree(device_candidates);
+        return false;
+    }
+
+
+    if (
+        cudaMalloc(
+            reinterpret_cast<void**>(
+                &device_offsets
+            ),
+            offset_bytes
+        ) != cudaSuccess
+    ) {
+        cudaFree(device_orders);
+        cudaFree(device_candidates);
+        return false;
+    }
+
+
+    if (
+        cudaMalloc(
+            reinterpret_cast<void**>(
+                &device_alignments
+            ),
+            alignment_bytes
+        ) != cudaSuccess
+    ) {
+        cudaFree(device_offsets);
+        cudaFree(device_orders);
+        cudaFree(device_candidates);
+
+        return false;
+    }
+
+
+    if (
+        cudaMemcpy(
+            device_candidates,
+            candidates.data(),
+            candidate_bytes,
+            cudaMemcpyHostToDevice
+        ) != cudaSuccess ||
+        cudaMemcpy(
+            device_orders,
+            ligand_orders.data(),
+            order_bytes,
+            cudaMemcpyHostToDevice
+        ) != cudaSuccess ||
+        cudaMemcpy(
+            device_offsets,
+            alignment_offsets.data(),
+            offset_bytes,
+            cudaMemcpyHostToDevice
+        ) != cudaSuccess
+    ) {
+        cudaFree(device_alignments);
+        cudaFree(device_offsets);
+        cudaFree(device_orders);
+        cudaFree(device_candidates);
+
+        return false;
+    }
+
+
+    const std::uint32_t candidate_count =
+        static_cast<std::uint32_t>(
+            candidates.size()
+        );
+
+
+    constexpr std::uint32_t block_size =
+        256;
+
+    const std::uint32_t block_count =
+        (
+            candidate_count +
+            block_size - 1
+        ) / block_size;
+
+
+    alignment_candidate_expand_kernel
+        <<<block_count, block_size>>>(
+            device_candidates,
+            candidate_count,
+            device_orders,
+            device_offsets,
+            device_alignments
+        );
+
+
+    if (
+        cudaGetLastError() != cudaSuccess ||
+        cudaDeviceSynchronize() != cudaSuccess
+    ) {
+        cudaFree(device_alignments);
+        cudaFree(device_offsets);
+        cudaFree(device_orders);
+        cudaFree(device_candidates);
+
+        return false;
+    }
+
+
+    alignments.resize(
+        total_alignments
+    );
+
+
+    if (
+        cudaMemcpy(
+            alignments.data(),
+            device_alignments,
+            alignment_bytes,
+            cudaMemcpyDeviceToHost
+        ) != cudaSuccess
+    ) {
+        alignments.clear();
+
+        cudaFree(device_alignments);
+        cudaFree(device_offsets);
+        cudaFree(device_orders);
+        cudaFree(device_candidates);
+
+        return false;
+    }
+
+
+    cudaFree(device_alignments);
+    cudaFree(device_offsets);
+    cudaFree(device_orders);
+    cudaFree(device_candidates);
 
 
     return true;
