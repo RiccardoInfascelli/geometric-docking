@@ -43,4 +43,9 @@ bool cuda_count_triplet_neighbor_records(
     std::vector<std::uint32_t>& record_counts
 );
 
+bool cuda_exclusive_prefix_sum(
+    const std::vector<std::uint32_t>& counts,
+    std::vector<std::uint32_t>& offsets
+);
+
 #endif

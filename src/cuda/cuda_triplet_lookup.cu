@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <cub/cub.cuh>
 
 
 namespace
@@ -290,6 +291,22 @@ __global__ void triplet_neighbor_count_kernel(
 
 
     counts[query_index] = count;
+}
+
+__global__ void write_final_prefix_offset_kernel(
+    const std::uint32_t* counts,
+    std::uint32_t count,
+    std::uint32_t* offsets
+)
+{
+    if (
+        blockIdx.x == 0 &&
+        threadIdx.x == 0
+    ) {
+        offsets[count] =
+            offsets[count - 1] +
+            counts[count - 1];
+    }
 }
 
 } // namespace
@@ -767,6 +784,216 @@ bool cuda_count_triplet_neighbor_records(
 
     cudaFree(device_counts);
     cudaFree(device_queries);
+
+
+    return true;
+}
+
+bool cuda_exclusive_prefix_sum(
+    const std::vector<std::uint32_t>& counts,
+    std::vector<std::uint32_t>& offsets
+)
+{
+    offsets.clear();
+
+
+    if (counts.empty()) {
+        offsets.push_back(0);
+        return true;
+    }
+
+
+    if (
+        counts.size() >
+        std::numeric_limits<std::uint32_t>::max()
+    ) {
+        return false;
+    }
+
+
+    std::uint64_t total = 0;
+
+    for (const auto count : counts) {
+
+        total += count;
+
+        if (
+            total >
+            std::numeric_limits<std::uint32_t>::max()
+        ) {
+            return false;
+        }
+    }
+
+
+    const std::uint32_t count =
+        static_cast<std::uint32_t>(
+            counts.size()
+        );
+
+
+    std::uint32_t* device_counts =
+        nullptr;
+
+    std::uint32_t* device_offsets =
+        nullptr;
+
+    void* temporary_storage =
+        nullptr;
+
+
+    const std::size_t count_bytes =
+        counts.size() *
+        sizeof(std::uint32_t);
+
+    const std::size_t offset_bytes =
+        (counts.size() + 1) *
+        sizeof(std::uint32_t);
+
+
+    if (
+        cudaMalloc(
+            reinterpret_cast<void**>(
+                &device_counts
+            ),
+            count_bytes
+        ) != cudaSuccess
+    ) {
+        return false;
+    }
+
+
+    if (
+        cudaMalloc(
+            reinterpret_cast<void**>(
+                &device_offsets
+            ),
+            offset_bytes
+        ) != cudaSuccess
+    ) {
+        cudaFree(device_counts);
+        return false;
+    }
+
+
+    if (
+        cudaMemcpy(
+            device_counts,
+            counts.data(),
+            count_bytes,
+            cudaMemcpyHostToDevice
+        ) != cudaSuccess
+    ) {
+        cudaFree(device_offsets);
+        cudaFree(device_counts);
+
+        return false;
+    }
+
+
+    std::size_t temporary_bytes = 0;
+
+
+    if (
+        cub::DeviceScan::ExclusiveSum(
+            temporary_storage,
+            temporary_bytes,
+            device_counts,
+            device_offsets,
+            count
+        ) != cudaSuccess
+    ) {
+        cudaFree(device_offsets);
+        cudaFree(device_counts);
+
+        return false;
+    }
+
+
+    if (
+        cudaMalloc(
+            &temporary_storage,
+            temporary_bytes
+        ) != cudaSuccess
+    ) {
+        cudaFree(device_offsets);
+        cudaFree(device_counts);
+
+        return false;
+    }
+
+
+    if (
+        cub::DeviceScan::ExclusiveSum(
+            temporary_storage,
+            temporary_bytes,
+            device_counts,
+            device_offsets,
+            count
+        ) != cudaSuccess
+    ) {
+        cudaFree(temporary_storage);
+        cudaFree(device_offsets);
+        cudaFree(device_counts);
+
+        return false;
+    }
+
+
+    write_final_prefix_offset_kernel
+        <<<1, 1>>>(
+            device_counts,
+            count,
+            device_offsets
+        );
+
+
+    if (cudaGetLastError() != cudaSuccess) {
+
+        cudaFree(temporary_storage);
+        cudaFree(device_offsets);
+        cudaFree(device_counts);
+
+        return false;
+    }
+
+
+    if (cudaDeviceSynchronize() != cudaSuccess) {
+
+        cudaFree(temporary_storage);
+        cudaFree(device_offsets);
+        cudaFree(device_counts);
+
+        return false;
+    }
+
+
+    offsets.resize(
+        counts.size() + 1
+    );
+
+
+    if (
+        cudaMemcpy(
+            offsets.data(),
+            device_offsets,
+            offset_bytes,
+            cudaMemcpyDeviceToHost
+        ) != cudaSuccess
+    ) {
+        offsets.clear();
+
+        cudaFree(temporary_storage);
+        cudaFree(device_offsets);
+        cudaFree(device_counts);
+
+        return false;
+    }
+
+
+    cudaFree(temporary_storage);
+    cudaFree(device_offsets);
+    cudaFree(device_counts);
 
 
     return true;
