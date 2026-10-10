@@ -59,6 +59,7 @@ add_library(
     src/cuda/cuda_triplet_index.cpp
     src/cuda/cuda_geometry.cpp
     src/cuda/cuda_grid.cpp
+    src/cuda/cuda_fast_scoring.cpp
 )
 
 target_include_directories(
@@ -183,6 +184,17 @@ if(ENABLE_CUDA)
 
 
 endif()
+
+add_executable(
+    gpu_fast_scoring_test
+    apps/gpu_fast_scoring_test.cpp
+)
+
+target_link_libraries(
+    gpu_fast_scoring_test
+    PRIVATE
+        docking_core
+)
 
 add_executable(
     gpu_grid_test
