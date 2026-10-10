@@ -2,9 +2,11 @@
 #define CUDA_BACKEND_HPP
 
 #include "cuda_triplet_types.hpp"
+#include "cuda_grid.hpp"
 
 #include <cstdint>
 #include <vector>
+
 
 
 inline constexpr std::uint32_t
@@ -88,6 +90,24 @@ bool cuda_compute_kabsch_transforms(
     const GpuPointArrayDevice& protein_points,
     const std::vector<GpuAlignmentCandidate>& alignments,
     std::vector<GpuRigidTransform>& transforms
+);
+
+bool cuda_upload_protein_grid(
+    const GpuProteinGridHost& host_grid,
+    GpuProteinGridDevice& device_grid
+);
+
+
+void cuda_free_protein_grid(
+    GpuProteinGridDevice& device_grid
+);
+
+
+bool cuda_score_grid_clash(
+    const GpuPointArrayDevice& ligand_atoms,
+    const GpuProteinGridDevice& protein_grid,
+    const std::vector<GpuRigidTransform>& transforms,
+    std::vector<GpuClashScore>& scores
 );
 
 #endif

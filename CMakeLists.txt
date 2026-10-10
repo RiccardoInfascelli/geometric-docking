@@ -102,6 +102,8 @@ if(ENABLE_CUDA)
         src/cuda/cuda_triplet_lookup.cu
         src/cuda/cuda_geometry_upload.cu
         src/cuda/cuda_kabsch.cu
+        src/cuda/cuda_grid_upload.cu
+        src/cuda/cuda_clash.cu
     )
 
     target_include_directories(
@@ -164,6 +166,17 @@ if(ENABLE_CUDA)
 
     target_link_libraries(
         cuda_kabsch_test
+        PRIVATE
+            docking_cuda
+    )
+
+    add_executable(
+        cuda_clash_test
+        apps/cuda_clash_test.cpp
+    )
+
+    target_link_libraries(
+        cuda_clash_test
         PRIVATE
             docking_cuda
     )

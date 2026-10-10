@@ -31,6 +31,48 @@ struct GpuProteinGridHost
     std::vector<GpuGridVoxel> voxels;
 };
 
+struct GpuProteinGridDevice
+{
+    double xmin{};
+    double ymin{};
+    double zmin{};
+
+    double voxel_size{};
+
+    std::int32_t nx{};
+    std::int32_t ny{};
+    std::int32_t nz{};
+
+    GpuGridVoxel* voxels{nullptr};
+
+    std::uint32_t voxel_count{};
+};
+
+
+struct GpuClashScore
+{
+    std::uint32_t occupied_atoms{};
+    std::uint32_t total_atoms{};
+
+    double fraction{};
+
+    std::uint32_t valid{};
+    std::uint32_t padding{};
+};
+
+
+static_assert(
+    std::is_trivially_copyable_v<
+        GpuProteinGridDevice
+    >
+);
+
+static_assert(
+    std::is_trivially_copyable_v<
+        GpuClashScore
+    >
+);
+
 
 static_assert(
     std::is_trivially_copyable_v<
