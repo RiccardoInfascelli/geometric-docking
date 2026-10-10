@@ -37,5 +37,10 @@ bool cuda_lookup_triplet_key_neighbors(
     std::vector<std::uint32_t>& neighbor_key_indices
 );
 
+bool cuda_count_triplet_neighbor_records(
+    const GpuFlatTripletIndexDevice& device_index,
+    const std::vector<GpuTripletKey>& queries,
+    std::vector<std::uint32_t>& record_counts
+);
 
 #endif

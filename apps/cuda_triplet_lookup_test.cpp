@@ -38,6 +38,10 @@ int main()
     GpuFlatTripletIndexHost host_index;
 
 
+    // ========================================================
+    // Test receptor index
+    // ========================================================
+
     host_index.keys = {
         make_key(
             0, 1, 2,
@@ -56,17 +60,25 @@ int main()
     };
 
 
+    /*
+     * key 0 -> 2 records
+     * key 1 -> 1 record
+     * key 2 -> 1 record
+     */
     host_index.offsets = {
         0,
-        1,
         2,
-        3
+        3,
+        4
     };
 
 
     host_index.records = {
         {{0, 1, 2}},
+        {{10, 11, 12}},
+
         {{3, 4, 5}},
+
         {{6, 7, 8}}
     };
 
@@ -238,6 +250,99 @@ int main()
 
 
     // ========================================================
+    // Neighbor record counting test
+    // ========================================================
+
+    const std::vector<GpuTripletKey>
+        count_queries = {
+
+            /*
+             * Neighbor of key 0:
+             *
+             * query bins = 2,3,4
+             * key 0 bins = 1,2,3
+             *
+             * difference = -1,-1,-1
+             *
+             * key 0 contains 2 records.
+             */
+            make_key(
+                0, 1, 2,
+                2, 3, 4
+            ),
+
+            /*
+             * Exact match with key 1,
+             * which contains 1 record.
+             */
+            make_key(
+                0, 1, 2,
+                4, 5, 6
+            ),
+
+            /*
+             * No matching chemical key.
+             */
+            make_key(
+                9, 9, 9,
+                4, 5, 6
+            )
+        };
+
+
+    std::vector<std::uint32_t>
+        record_counts;
+
+
+    if (
+        !cuda_count_triplet_neighbor_records(
+            device_index,
+            count_queries,
+            record_counts
+        )
+    ) {
+        std::cerr
+            << "CUDA neighbor record counting failed\n";
+
+        cuda_free_triplet_index(
+            device_index
+        );
+
+        return 1;
+    }
+
+
+    if (
+        record_counts.size() != 3 ||
+        record_counts[0] != 2 ||
+        record_counts[1] != 1 ||
+        record_counts[2] != 0
+    ) {
+        std::cerr
+            << "Unexpected neighbor record counts\n";
+
+        if (record_counts.size() == 3) {
+
+            std::cerr
+                << "Got: "
+                << record_counts[0] << ", "
+                << record_counts[1] << ", "
+                << record_counts[2] << '\n';
+        }
+
+        cuda_free_triplet_index(
+            device_index
+        );
+
+        return 1;
+    }
+
+
+    std::cout
+        << "CUDA neighbor record counting passed\n";
+
+
+    // ========================================================
     // Cleanup
     // ========================================================
 
@@ -247,7 +352,7 @@ int main()
 
 
     std::cout
-        << "CUDA triplet lookup tests passed\n";
+        << "All CUDA triplet lookup tests passed\n";
 
 
     return 0;
