@@ -3,6 +3,7 @@
 
 #include "cuda_triplet_types.hpp"
 #include "cuda_grid.hpp"
+#include "cuda_fast_scoring.hpp"
 
 #include <cstdint>
 #include <vector>
@@ -108,6 +109,24 @@ bool cuda_score_grid_clash(
     const GpuProteinGridDevice& protein_grid,
     const std::vector<GpuRigidTransform>& transforms,
     std::vector<GpuClashScore>& scores
+);
+
+bool cuda_upload_fast_matching_areas(
+    const std::vector<GpuFastMatchingArea>& host_areas,
+    GpuFastMatchingAreaArrayDevice& device_areas
+);
+
+
+void cuda_free_fast_matching_areas(
+    GpuFastMatchingAreaArrayDevice& device_areas
+);
+
+
+bool cuda_score_fast_interactions(
+    const GpuFastMatchingAreaArrayDevice& ligand_areas,
+    const GpuProteinGridDevice& protein_grid,
+    const std::vector<GpuRigidTransform>& transforms,
+    std::vector<GpuFastScore>& scores
 );
 
 #endif

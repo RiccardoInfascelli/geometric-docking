@@ -105,6 +105,7 @@ if(ENABLE_CUDA)
         src/cuda/cuda_kabsch.cu
         src/cuda/cuda_grid_upload.cu
         src/cuda/cuda_clash.cu
+        src/cuda/cuda_fast_score.cu
     )
 
     target_include_directories(
@@ -178,6 +179,17 @@ if(ENABLE_CUDA)
 
     target_link_libraries(
         cuda_clash_test
+        PRIVATE
+            docking_cuda
+    )
+
+    add_executable(
+        cuda_fast_score_test
+        apps/cuda_fast_score_test.cpp
+    )
+
+    target_link_libraries(
+        cuda_fast_score_test
         PRIVATE
             docking_cuda
     )
