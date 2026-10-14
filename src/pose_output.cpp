@@ -3,7 +3,7 @@
 #include "geometry.hpp"
 #include "molecule_io.hpp"
 
-#include <GraphMol/FileParsers/FileWriters.h>
+#include <GraphMol/FileParsers/FileParsers.h>
 #include <Geometry/point.h>
 
 #include <algorithm>

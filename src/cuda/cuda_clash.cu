@@ -69,37 +69,77 @@ __device__ GpuPoint3 transform_point(
     const GpuRigidTransform& transform
 )
 {
-    GpuPoint3 result;
+    /*
+     * Match the serial numerical semantics.
+     *
+     * interaction::coordinate_type is float:
+     *
+     * RDKit coordinates
+     *   -> float input point
+     *   -> double transform arithmetic
+     *   -> float transformed point
+     *   -> grid lookup
+     *
+     * GpuPoint3 remains double elsewhere so Kabsch itself
+     * does not lose precision.
+     */
+    const double x =
+        static_cast<double>(
+            static_cast<float>(point.x)
+        );
+
+    const double y =
+        static_cast<double>(
+            static_cast<float>(point.y)
+        );
+
+    const double z =
+        static_cast<double>(
+            static_cast<float>(point.z)
+        );
 
 
-    result.x =
-        transform.rotation[0] *
-            point.x +
-        transform.rotation[1] *
-            point.y +
-        transform.rotation[2] *
-            point.z +
+    const double transformed_x =
+        transform.rotation[0] * x +
+        transform.rotation[1] * y +
+        transform.rotation[2] * z +
         transform.translation[0];
 
-
-    result.y =
-        transform.rotation[3] *
-            point.x +
-        transform.rotation[4] *
-            point.y +
-        transform.rotation[5] *
-            point.z +
+    const double transformed_y =
+        transform.rotation[3] * x +
+        transform.rotation[4] * y +
+        transform.rotation[5] * z +
         transform.translation[1];
 
+    const double transformed_z =
+        transform.rotation[6] * x +
+        transform.rotation[7] * y +
+        transform.rotation[8] * z +
+        transform.translation[2];
+
+
+    GpuPoint3 result;
+
+    result.x =
+        static_cast<double>(
+            static_cast<float>(
+                transformed_x
+            )
+        );
+
+    result.y =
+        static_cast<double>(
+            static_cast<float>(
+                transformed_y
+            )
+        );
 
     result.z =
-        transform.rotation[6] *
-            point.x +
-        transform.rotation[7] *
-            point.y +
-        transform.rotation[8] *
-            point.z +
-        transform.translation[2];
+        static_cast<double>(
+            static_cast<float>(
+                transformed_z
+            )
+        );
 
 
     return result;

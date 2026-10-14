@@ -118,6 +118,8 @@ if(ENABLE_CUDA)
     target_link_libraries(
         docking_cuda
         PUBLIC
+            libinteraction
+            Eigen3::Eigen
             CUDA::cudart
             CUDA::cusolver
     )
@@ -125,7 +127,7 @@ if(ENABLE_CUDA)
     set_target_properties(
         docking_cuda
         PROPERTIES
-            CUDA_STANDARD 20
+            CUDA_STANDARD 17
             CUDA_STANDARD_REQUIRED ON
     )
 
@@ -206,6 +208,19 @@ if(ENABLE_CUDA)
             docking_cuda
     )
 
+
+
+add_executable(
+    cuda_real_pipeline_test
+    apps/cuda_real_pipeline_test.cpp
+)
+
+target_link_libraries(
+    cuda_real_pipeline_test
+    PRIVATE
+        docking_core
+        docking_cuda
+)
 
 endif()
 
