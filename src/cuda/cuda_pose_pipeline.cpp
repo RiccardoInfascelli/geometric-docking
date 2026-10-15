@@ -126,44 +126,28 @@ bool cuda_run_pose_pipeline(
     }
 
 
-    // ========================================================
-    // Temporary host download
+        // ========================================================
+    // 3. GPU clash compaction
     //
-    // For now filtering remains on CPU.
-    // The important change is that there is no host round-trip
-    // between Kabsch and clash anymore.
+    // Keep only valid transforms below the clash threshold.
+    // The full transform/clash arrays remain on the GPU.
     // ========================================================
 
-    std::vector<GpuRigidTransform>
-        transforms;
+    GpuClashSurvivorArrayDevice
+        device_survivors{};
 
 
-    std::vector<GpuClashScore>
-        clash_scores;
+    std::uint32_t
+        valid_transform_count = 0;
 
 
     if (
-        !cuda_download_rigid_transforms(
+        !cuda_compact_clash_survivors(
             device_transforms,
-            transforms
-        )
-    ) {
-        cuda_free_clash_scores(
-            device_clash_scores
-        );
-
-        cuda_free_rigid_transforms(
-            device_transforms
-        );
-
-        return false;
-    }
-
-
-    if (
-        !cuda_download_clash_scores(
             device_clash_scores,
-            clash_scores
+            clash_threshold,
+            device_survivors,
+            valid_transform_count
         )
     ) {
         cuda_free_clash_scores(
@@ -178,6 +162,15 @@ bool cuda_run_pose_pipeline(
     }
 
 
+    result.valid_transform_count =
+        valid_transform_count;
+
+
+    result.clash_survivor_count =
+        device_survivors.count;
+
+
+    // Full Kabsch/clash arrays are no longer needed.
     cuda_free_clash_scores(
         device_clash_scores
     );
@@ -189,111 +182,68 @@ bool cuda_run_pose_pipeline(
 
 
     if (
-        transforms.size() !=
-        alignments.size() ||
-        clash_scores.size() !=
-        alignments.size()
+        result.clash_survivor_count == 0
     ) {
-        return false;
-    }
+        cuda_free_clash_survivors(
+            device_survivors
+        );
 
-
-    for (const auto& transform :
-         transforms) {
-
-        if (transform.valid != 0) {
-
-            ++result
-                .valid_transform_count;
-        }
+        return true;
     }
 
 
     // ========================================================
-    // 3. Clash filtering
+    // Temporary survivor download
     //
-    // Keep the mapping to the original alignment index.
+    // Fast scoring still uses the legacy host-vector API.
+    // Therefore only the compacted survivor set is downloaded.
     // ========================================================
 
     std::vector<GpuRigidTransform>
         survivor_transforms;
 
+
     std::vector<std::uint32_t>
         survivor_alignment_indices;
+
 
     std::vector<GpuClashScore>
         survivor_clash_scores;
 
 
-    survivor_transforms.reserve(
-        transforms.size()
-    );
-
-    survivor_alignment_indices.reserve(
-        transforms.size()
-    );
-
-    survivor_clash_scores.reserve(
-        transforms.size()
-    );
-
-
-    for (
-        std::size_t i = 0;
-        i < transforms.size();
-        ++i
+    if (
+        !cuda_download_clash_survivors(
+            device_survivors,
+            survivor_transforms,
+            survivor_clash_scores,
+            survivor_alignment_indices
+        )
     ) {
-        const auto& transform =
-            transforms[i];
-
-        const auto& clash =
-            clash_scores[i];
-
-
-        if (
-            transform.valid == 0 ||
-            clash.valid == 0
-        ) {
-            continue;
-        }
-
-
-        if (
-            clash.fraction >
-            clash_threshold
-        ) {
-            continue;
-        }
-
-
-        survivor_transforms.push_back(
-            transform
+        cuda_free_clash_survivors(
+            device_survivors
         );
 
-        survivor_alignment_indices.push_back(
-            static_cast<std::uint32_t>(
-                i
-            )
-        );
-
-        survivor_clash_scores.push_back(
-            clash
-        );
+        return false;
     }
 
 
-    result.clash_survivor_count =
-        static_cast<std::uint32_t>(
-            survivor_transforms.size()
-        );
+    cuda_free_clash_survivors(
+        device_survivors
+    );
 
 
     if (
-        survivor_transforms.empty()
-    ) {
-        return true;
-    }
+        survivor_transforms.size() !=
+            result.clash_survivor_count ||
 
+        survivor_clash_scores.size() !=
+            result.clash_survivor_count ||
+
+        survivor_alignment_indices.size() !=
+            result.clash_survivor_count
+    ) {
+        return false;
+    }
 
     // ========================================================
     // 4. Fast interaction scoring

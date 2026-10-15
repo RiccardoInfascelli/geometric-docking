@@ -34,6 +34,14 @@ struct GpuClashScoreArrayDevice
     std::uint32_t count{};
 };
 
+struct GpuClashSurvivorArrayDevice
+{
+    GpuRigidTransform* transforms{nullptr};
+    GpuClashScore* clash_scores{nullptr};
+    std::uint32_t* alignment_indices{nullptr};
+    std::uint32_t count{};
+};
+
 
 struct GpuFastScoreArrayDevice
 {
@@ -223,6 +231,27 @@ void cuda_free_clash_scores(
     GpuClashScoreArrayDevice& device_scores
 );
 
+
+bool cuda_compact_clash_survivors(
+    const GpuRigidTransformArrayDevice& transforms,
+    const GpuClashScoreArrayDevice& clash_scores,
+    double clash_threshold,
+    GpuClashSurvivorArrayDevice& survivors,
+    std::uint32_t& valid_transform_count
+);
+
+
+bool cuda_download_clash_survivors(
+    const GpuClashSurvivorArrayDevice& device_survivors,
+    std::vector<GpuRigidTransform>& host_transforms,
+    std::vector<GpuClashScore>& host_clash_scores,
+    std::vector<std::uint32_t>& host_alignment_indices
+);
+
+
+void cuda_free_clash_survivors(
+    GpuClashSurvivorArrayDevice& survivors
+);
 
 // ============================================================
 // Fast matching areas

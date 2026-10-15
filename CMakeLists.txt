@@ -105,6 +105,7 @@ if(ENABLE_CUDA)
         src/cuda/cuda_kabsch.cu
         src/cuda/cuda_grid_upload.cu
         src/cuda/cuda_clash.cu
+        src/cuda/cuda_compaction.cu
         src/cuda/cuda_fast_score.cu
         src/cuda/cuda_pose_pipeline.cpp
     )
