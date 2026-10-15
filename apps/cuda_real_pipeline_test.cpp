@@ -335,6 +335,12 @@ int main(
     GpuFastMatchingAreaArrayDevice
         device_fast_areas{};
 
+    GpuTripletNeighborCountArrayDevice
+        device_neighbor_counts{};
+
+    GpuTripletNeighborOffsetArrayDevice
+        device_neighbor_offsets{};
+
     GpuTripletCandidateArrayDevice
         device_triplet_candidates{};
 
@@ -365,6 +371,14 @@ int main(
 
             cuda_free_triplet_candidates(
                 device_triplet_candidates
+            );
+
+            cuda_free_triplet_neighbor_offsets(
+                device_neighbor_offsets
+            );
+
+            cuda_free_triplet_neighbor_counts(
+                device_neighbor_counts
             );
 
             cuda_free_fast_matching_areas(
@@ -593,35 +607,119 @@ int main(
         // CUDA triplet lookup
         // ====================================================
 
+        if (
+            !cuda_count_triplet_neighbor_records_device(
+                device_triplet_index,
+                queries,
+                device_neighbor_counts
+            )
+        ) {
+            throw std::runtime_error(
+                "CUDA device candidate counting failed"
+            );
+        }
+
+
+        // Temporary download for CPU/GPU numerical
+        // correctness validation.
         std::vector<std::uint32_t>
             candidate_counts;
 
 
         if (
-            !cuda_count_triplet_neighbor_records(
-                device_triplet_index,
-                queries,
+            !cuda_download_triplet_neighbor_counts(
+                device_neighbor_counts,
                 candidate_counts
             )
         ) {
             throw std::runtime_error(
-                "CUDA candidate counting failed"
+                "CUDA candidate count download failed"
             );
         }
 
 
+        if (
+            device_neighbor_counts.count != queries.size()
+            ||
+            candidate_counts.size() != queries.size()
+        ) {
+            throw std::runtime_error(
+                "CUDA candidate count size mismatch"
+            );
+        }
+
+
+        if (
+            !cuda_exclusive_triplet_neighbor_prefix_sum_device(
+                device_neighbor_counts,
+                device_neighbor_offsets
+            )
+        ) {
+            throw std::runtime_error(
+                "CUDA device candidate prefix sum failed"
+            );
+        }
+
+
+        // Temporary host copy for candidate expansion
+        // and CPU/GPU correctness validation.
         std::vector<std::uint32_t>
             candidate_offsets;
 
 
         if (
-            !cuda_exclusive_prefix_sum(
-                candidate_counts,
+            !cuda_download_triplet_neighbor_offsets(
+                device_neighbor_offsets,
                 candidate_offsets
             )
         ) {
             throw std::runtime_error(
-                "CUDA candidate prefix sum failed"
+                "CUDA candidate offset download failed"
+            );
+        }
+
+
+        if (
+            device_neighbor_offsets.count !=
+                candidate_counts.size() + 1
+            ||
+            candidate_offsets.size() !=
+                candidate_counts.size() + 1
+        ) {
+            throw std::runtime_error(
+                "CUDA candidate offset size mismatch"
+            );
+        }
+
+
+        // Independent CPU validation of every GPU offset.
+        std::uint64_t expected_candidate_offset = 0;
+
+        for (
+            std::size_t i = 0;
+            i < candidate_counts.size();
+            ++i
+        ) {
+            if (
+                candidate_offsets[i] !=
+                expected_candidate_offset
+            ) {
+                throw std::runtime_error(
+                    "CPU/GPU candidate prefix mismatch"
+                );
+            }
+
+            expected_candidate_offset +=
+                candidate_counts[i];
+        }
+
+
+        if (
+            candidate_offsets.back() !=
+            expected_candidate_offset
+        ) {
+            throw std::runtime_error(
+                "CPU/GPU final candidate offset mismatch"
             );
         }
 
@@ -630,7 +728,8 @@ int main(
             !cuda_expand_triplet_neighbor_records_device(
                 device_triplet_index,
                 queries,
-                candidate_offsets,
+                device_neighbor_counts,
+                device_neighbor_offsets,
                 device_triplet_candidates
             )
         ) {

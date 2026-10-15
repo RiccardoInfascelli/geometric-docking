@@ -318,6 +318,313 @@ int main()
     // Prefix sum
     // ========================================================
 
+    // ========================================================
+    // Device-native triplet neighbor counting equivalence
+    // ========================================================
+
+    {
+        GpuTripletNeighborCountArrayDevice device_counts{};
+        GpuTripletNeighborCountArrayDevice empty_counts{};
+
+        const auto release = [&]() {
+            cuda_free_triplet_neighbor_counts(empty_counts);
+            cuda_free_triplet_neighbor_counts(device_counts);
+        };
+
+        const auto fail = [&](const char* message) {
+            release();
+            cuda_free_triplet_index(device_index);
+            std::cerr << message << '\n';
+            return 1;
+        };
+
+        if (
+            !cuda_count_triplet_neighbor_records_device(
+                device_index,
+                count_queries,
+                device_counts
+            )
+        ) {
+            return fail("CUDA device neighbor counting failed");
+        }
+
+        std::vector<std::uint32_t> downloaded_counts;
+
+        if (
+            !cuda_download_triplet_neighbor_counts(
+                device_counts,
+                downloaded_counts
+            )
+            ||
+            device_counts.count != record_counts.size()
+            ||
+            downloaded_counts != record_counts
+        ) {
+            return fail("CUDA device neighbor count mismatch");
+        }
+
+        // A non-empty output must not be overwritten.
+        if (
+            cuda_count_triplet_neighbor_records_device(
+                device_index,
+                count_queries,
+                device_counts
+            )
+        ) {
+            return fail("Occupied device count output accepted");
+        }
+
+        // An empty query list produces an empty output.
+        const std::vector<GpuTripletKey> empty_queries;
+
+        if (
+            !cuda_count_triplet_neighbor_records_device(
+                device_index,
+                empty_queries,
+                empty_counts
+            )
+        ) {
+            return fail("Empty device neighbor counting failed");
+        }
+
+        std::vector<std::uint32_t> downloaded_empty;
+
+        if (
+            !cuda_download_triplet_neighbor_counts(
+                empty_counts,
+                downloaded_empty
+            )
+            ||
+            !downloaded_empty.empty()
+            ||
+            empty_counts.count != 0
+            ||
+            empty_counts.counts != nullptr
+        ) {
+            return fail("Empty device neighbor counting mismatch");
+        }
+
+        // A missing GPU triplet index must be rejected
+        // when queries are non-empty.
+        GpuFlatTripletIndexDevice invalid_index{};
+        GpuTripletNeighborCountArrayDevice invalid_counts{};
+
+        if (
+            cuda_count_triplet_neighbor_records_device(
+                invalid_index,
+                count_queries,
+                invalid_counts
+            )
+            ||
+            invalid_counts.counts != nullptr
+            ||
+            invalid_counts.count != 0
+        ) {
+            cuda_free_triplet_neighbor_counts(invalid_counts);
+            return fail("Invalid device triplet index accepted");
+        }
+
+        release();
+
+        if (
+            device_counts.counts != nullptr ||
+            device_counts.count != 0 ||
+            empty_counts.counts != nullptr ||
+            empty_counts.count != 0
+        ) {
+            cuda_free_triplet_index(device_index);
+            std::cerr << "Device neighbor count cleanup failed\n";
+            return 1;
+        }
+
+        std::cout
+            << "CUDA device neighbor counting equivalence passed\n";
+    }
+
+
+    // ========================================================
+    // Device-native triplet neighbor prefix scan equivalence
+    // ========================================================
+
+    {
+        GpuTripletNeighborCountArrayDevice device_counts{};
+        GpuTripletNeighborOffsetArrayDevice device_offsets{};
+
+        GpuTripletNeighborCountArrayDevice empty_counts{};
+        GpuTripletNeighborOffsetArrayDevice empty_offsets{};
+
+        GpuTripletNeighborCountArrayDevice overflow_counts{};
+        GpuTripletNeighborOffsetArrayDevice overflow_offsets{};
+
+        const auto release = [&]() {
+            cuda_free_triplet_neighbor_offsets(overflow_offsets);
+            cuda_free_triplet_neighbor_counts(overflow_counts);
+            cuda_free_triplet_neighbor_offsets(empty_offsets);
+            cuda_free_triplet_neighbor_offsets(device_offsets);
+            cuda_free_triplet_neighbor_counts(device_counts);
+        };
+
+        const auto fail = [&](const char* message) {
+            release();
+            cuda_free_triplet_index(device_index);
+            std::cerr << message << '\n';
+            return 1;
+        };
+
+        // Count neighbors directly on the GPU.
+        if (
+            !cuda_count_triplet_neighbor_records_device(
+                device_index,
+                count_queries,
+                device_counts
+            )
+        ) {
+            return fail("Device neighbor counting failed");
+        }
+
+        // Scan counts without downloading or uploading them.
+        if (
+            !cuda_exclusive_triplet_neighbor_prefix_sum_device(
+                device_counts,
+                device_offsets
+            )
+        ) {
+            return fail("Device neighbor prefix scan failed");
+        }
+
+        // Independent reference from the legacy API.
+        std::vector<std::uint32_t> reference_offsets;
+
+        if (
+            !cuda_exclusive_prefix_sum(
+                record_counts,
+                reference_offsets
+            )
+        ) {
+            return fail("Legacy neighbor prefix scan failed");
+        }
+
+        std::vector<std::uint32_t> downloaded_offsets;
+
+        if (
+            !cuda_download_triplet_neighbor_offsets(
+                device_offsets,
+                downloaded_offsets
+            )
+            ||
+            device_offsets.count != reference_offsets.size()
+            ||
+            downloaded_offsets != reference_offsets
+            ||
+            downloaded_offsets !=
+                std::vector<std::uint32_t>{0, 2, 3, 3}
+        ) {
+            return fail("Device neighbor prefix offset mismatch");
+        }
+
+        // Reusing an occupied output must fail.
+        if (
+            cuda_exclusive_triplet_neighbor_prefix_sum_device(
+                device_counts,
+                device_offsets
+            )
+        ) {
+            return fail("Occupied neighbor offset output accepted");
+        }
+
+        // Empty counts must produce exactly [0].
+        if (
+            !cuda_exclusive_triplet_neighbor_prefix_sum_device(
+                empty_counts,
+                empty_offsets
+            )
+        ) {
+            return fail("Empty neighbor prefix scan failed");
+        }
+
+        std::vector<std::uint32_t> downloaded_empty;
+
+        if (
+            !cuda_download_triplet_neighbor_offsets(
+                empty_offsets,
+                downloaded_empty
+            )
+            ||
+            empty_offsets.count != 1
+            ||
+            downloaded_empty !=
+                std::vector<std::uint32_t>{0}
+        ) {
+            return fail("Empty neighbor prefix scan mismatch");
+        }
+
+        // UINT32_MAX + 1 must be rejected.
+        const std::uint32_t overflow_input[2] = {
+            ~std::uint32_t{0},
+            1
+        };
+
+        if (
+            cudaMalloc(
+                reinterpret_cast<void**>(
+                    &overflow_counts.counts
+                ),
+                sizeof(overflow_input)
+            ) != cudaSuccess
+        ) {
+            return fail("Neighbor overflow allocation failed");
+        }
+
+        overflow_counts.count = 2;
+
+        if (
+            cudaMemcpy(
+                overflow_counts.counts,
+                overflow_input,
+                sizeof(overflow_input),
+                cudaMemcpyHostToDevice
+            ) != cudaSuccess
+        ) {
+            return fail("Neighbor overflow upload failed");
+        }
+
+        if (
+            cuda_exclusive_triplet_neighbor_prefix_sum_device(
+                overflow_counts,
+                overflow_offsets
+            )
+            ||
+            overflow_offsets.offsets != nullptr
+            ||
+            overflow_offsets.count != 0
+        ) {
+            return fail("Neighbor prefix scan overflow not rejected");
+        }
+
+        release();
+
+        if (
+            device_counts.counts != nullptr ||
+            device_counts.count != 0 ||
+            device_offsets.offsets != nullptr ||
+            device_offsets.count != 0 ||
+            empty_offsets.offsets != nullptr ||
+            empty_offsets.count != 0 ||
+            overflow_counts.counts != nullptr ||
+            overflow_counts.count != 0 ||
+            overflow_offsets.offsets != nullptr ||
+            overflow_offsets.count != 0
+        ) {
+            cuda_free_triplet_index(device_index);
+            std::cerr << "Device neighbor scan cleanup failed\n";
+            return 1;
+        }
+
+        std::cout
+            << "CUDA device neighbor prefix scan equivalence passed\n";
+    }
+
+
     std::vector<std::uint32_t>
         candidate_offsets;
 
@@ -554,6 +861,228 @@ int main()
     // ========================================================
     // Equivalent ligand orders
     // ========================================================
+
+    // ========================================================
+    // Fully device-native triplet candidate expansion
+    // ========================================================
+
+    {
+        GpuTripletNeighborCountArrayDevice device_counts{};
+        GpuTripletNeighborOffsetArrayDevice device_offsets{};
+        GpuTripletCandidateArrayDevice device_candidates{};
+
+        GpuTripletNeighborOffsetArrayDevice invalid_offsets{};
+
+        GpuTripletNeighborCountArrayDevice empty_counts{};
+        GpuTripletNeighborOffsetArrayDevice empty_offsets{};
+        GpuTripletCandidateArrayDevice empty_candidates{};
+
+        const auto release = [&]() {
+            cuda_free_triplet_candidates(empty_candidates);
+            cuda_free_triplet_neighbor_offsets(empty_offsets);
+
+            cuda_free_triplet_neighbor_offsets(invalid_offsets);
+
+            cuda_free_triplet_candidates(device_candidates);
+            cuda_free_triplet_neighbor_offsets(device_offsets);
+            cuda_free_triplet_neighbor_counts(device_counts);
+        };
+
+        const auto fail = [&](const char* message) {
+            release();
+            cuda_free_triplet_index(device_index);
+            std::cerr << message << '\n';
+            return 1;
+        };
+
+        // Counts remain on the GPU.
+        if (
+            !cuda_count_triplet_neighbor_records_device(
+                device_index,
+                count_queries,
+                device_counts
+            )
+        ) {
+            return fail("Device triplet counting failed");
+        }
+
+        // Prefix scan consumes the GPU counts directly.
+        if (
+            !cuda_exclusive_triplet_neighbor_prefix_sum_device(
+                device_counts,
+                device_offsets
+            )
+        ) {
+            return fail("Device triplet prefix scan failed");
+        }
+
+        // Expansion consumes both GPU buffers directly.
+        if (
+            !cuda_expand_triplet_neighbor_records_device(
+                device_index,
+                count_queries,
+                device_counts,
+                device_offsets,
+                device_candidates
+            )
+        ) {
+            return fail("Device-native triplet expansion failed");
+        }
+
+        std::vector<GpuTripletCandidate>
+            downloaded_candidates;
+
+        if (
+            !cuda_download_triplet_candidates(
+                device_candidates,
+                downloaded_candidates
+            )
+            ||
+            device_candidates.count != candidates.size()
+            ||
+            downloaded_candidates.size() != candidates.size()
+            ||
+            downloaded_candidates.size() != 3
+        ) {
+            return fail("Device-native triplet count mismatch");
+        }
+
+        // Both paths use the same expansion kernel.
+        // Compare the complete generated records.
+        for (
+            std::size_t i = 0;
+            i < candidates.size();
+            ++i
+        ) {
+            if (
+                std::memcmp(
+                    &candidates[i],
+                    &downloaded_candidates[i],
+                    sizeof(GpuTripletCandidate)
+                ) != 0
+            ) {
+                return fail("Device-native triplet record mismatch");
+            }
+        }
+
+        // Occupied output must be rejected.
+        if (
+            cuda_expand_triplet_neighbor_records_device(
+                device_index,
+                count_queries,
+                device_counts,
+                device_offsets,
+                device_candidates
+            )
+        ) {
+            return fail("Occupied candidate output accepted");
+        }
+
+        cuda_free_triplet_candidates(device_candidates);
+
+        // Corrupt one intermediate offset.
+        std::vector<std::uint32_t> bad_host_offsets =
+            candidate_offsets;
+
+        bad_host_offsets[1] += 1;
+
+        const std::size_t offset_bytes =
+            bad_host_offsets.size() * sizeof(std::uint32_t);
+
+        if (
+            cudaMalloc(
+                reinterpret_cast<void**>(&invalid_offsets.offsets),
+                offset_bytes
+            ) != cudaSuccess
+        ) {
+            return fail("Invalid offset allocation failed");
+        }
+
+        invalid_offsets.count =
+            static_cast<std::uint32_t>(
+                bad_host_offsets.size()
+            );
+
+        if (
+            cudaMemcpy(
+                invalid_offsets.offsets,
+                bad_host_offsets.data(),
+                offset_bytes,
+                cudaMemcpyHostToDevice
+            ) != cudaSuccess
+        ) {
+            return fail("Invalid offset upload failed");
+        }
+
+        if (
+            cuda_expand_triplet_neighbor_records_device(
+                device_index,
+                count_queries,
+                device_counts,
+                invalid_offsets,
+                device_candidates
+            )
+            ||
+            device_candidates.candidates != nullptr
+            ||
+            device_candidates.count != 0
+        ) {
+            return fail("Invalid device offsets not rejected");
+        }
+
+        // Empty queries must produce no candidates.
+        if (
+            !cuda_exclusive_triplet_neighbor_prefix_sum_device(
+                empty_counts,
+                empty_offsets
+            )
+        ) {
+            return fail("Empty device triplet scan failed");
+        }
+
+        const std::vector<GpuTripletKey> empty_queries;
+
+        if (
+            !cuda_expand_triplet_neighbor_records_device(
+                device_index,
+                empty_queries,
+                empty_counts,
+                empty_offsets,
+                empty_candidates
+            )
+            ||
+            empty_candidates.candidates != nullptr
+            ||
+            empty_candidates.count != 0
+        ) {
+            return fail("Empty device triplet expansion failed");
+        }
+
+        release();
+
+        if (
+            device_counts.counts != nullptr ||
+            device_counts.count != 0 ||
+            device_offsets.offsets != nullptr ||
+            device_offsets.count != 0 ||
+            device_candidates.candidates != nullptr ||
+            device_candidates.count != 0 ||
+            invalid_offsets.offsets != nullptr ||
+            invalid_offsets.count != 0 ||
+            empty_offsets.offsets != nullptr ||
+            empty_offsets.count != 0 ||
+            empty_candidates.candidates != nullptr ||
+            empty_candidates.count != 0
+        ) {
+            cuda_free_triplet_index(device_index);
+            std::cerr << "Device triplet expansion cleanup failed\n";
+            return 1;
+        }
+
+        std::cout
+            << "CUDA device-native triplet expansion equivalence passed\n";
+    }
+
 
     std::vector<GpuLigandTripletOrders>
         ligand_orders(3);

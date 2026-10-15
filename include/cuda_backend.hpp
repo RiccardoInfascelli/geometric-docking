@@ -109,6 +109,31 @@ bool cuda_lookup_triplet_key_neighbors(
 );
 
 
+struct GpuTripletNeighborCountArrayDevice
+{
+    std::uint32_t* counts{nullptr};
+    std::uint32_t count{};
+};
+
+
+bool cuda_count_triplet_neighbor_records_device(
+    const GpuFlatTripletIndexDevice& device_index,
+    const std::vector<GpuTripletKey>& queries,
+    GpuTripletNeighborCountArrayDevice& counts
+);
+
+
+bool cuda_download_triplet_neighbor_counts(
+    const GpuTripletNeighborCountArrayDevice& device_counts,
+    std::vector<std::uint32_t>& host_counts
+);
+
+
+void cuda_free_triplet_neighbor_counts(
+    GpuTripletNeighborCountArrayDevice& counts
+);
+
+
 bool cuda_count_triplet_neighbor_records(
     const GpuFlatTripletIndexDevice& device_index,
     const std::vector<GpuTripletKey>& queries,
@@ -202,6 +227,39 @@ bool cuda_download_alignment_offsets(
 
 void cuda_free_alignment_offsets(
     GpuAlignmentOffsetArrayDevice& offsets
+);
+
+
+struct GpuTripletNeighborOffsetArrayDevice
+{
+    std::uint32_t* offsets{nullptr};
+    std::uint32_t count{};
+};
+
+
+bool cuda_exclusive_triplet_neighbor_prefix_sum_device(
+    const GpuTripletNeighborCountArrayDevice& counts,
+    GpuTripletNeighborOffsetArrayDevice& offsets
+);
+
+
+bool cuda_download_triplet_neighbor_offsets(
+    const GpuTripletNeighborOffsetArrayDevice& device_offsets,
+    std::vector<std::uint32_t>& host_offsets
+);
+
+
+void cuda_free_triplet_neighbor_offsets(
+    GpuTripletNeighborOffsetArrayDevice& offsets
+);
+
+
+bool cuda_expand_triplet_neighbor_records_device(
+    const GpuFlatTripletIndexDevice& device_index,
+    const std::vector<GpuTripletKey>& queries,
+    const GpuTripletNeighborCountArrayDevice& device_counts,
+    const GpuTripletNeighborOffsetArrayDevice& device_offsets,
+    GpuTripletCandidateArrayDevice& candidates
 );
 
 

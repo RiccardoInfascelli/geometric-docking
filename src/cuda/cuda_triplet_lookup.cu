@@ -328,6 +328,33 @@ __global__ void write_final_prefix_offset_kernel(
 }
 
 
+__global__ void validate_device_triplet_candidate_offsets_kernel(
+    const std::uint32_t* counts,
+    const std::uint32_t* offsets,
+    std::uint32_t count,
+    std::uint32_t* invalid
+)
+{
+    const std::uint64_t i =
+        static_cast<std::uint64_t>(blockIdx.x) *
+        blockDim.x + threadIdx.x;
+
+    if (i >= count)
+        return;
+
+    const std::uint32_t begin = offsets[i];
+    const std::uint32_t end = offsets[i + 1];
+
+    if (
+        (i == 0 && begin != 0) ||
+        end < begin ||
+        end - begin != counts[i]
+    ) {
+        atomicExch(invalid, 1u);
+    }
+}
+
+
 __global__ void triplet_neighbor_expand_kernel(
     const GpuTripletKey* index_keys,
     const std::uint32_t* index_offsets,
@@ -924,6 +951,164 @@ bool cuda_lookup_triplet_key_neighbors(
     return true;
 }
 
+bool cuda_count_triplet_neighbor_records_device(
+    const GpuFlatTripletIndexDevice& device_index,
+    const std::vector<GpuTripletKey>& queries,
+    GpuTripletNeighborCountArrayDevice& counts
+)
+{
+    if (
+        counts.counts != nullptr ||
+        counts.count != 0
+    ) {
+        return false;
+    }
+
+    if (queries.empty())
+        return true;
+
+    if (
+        queries.size() >
+        std::numeric_limits<std::uint32_t>::max()
+    ) {
+        return false;
+    }
+
+    if (
+        device_index.keys == nullptr ||
+        device_index.offsets == nullptr
+    ) {
+        return false;
+    }
+
+    GpuTripletKey* device_queries = nullptr;
+    std::uint32_t* device_counts = nullptr;
+
+    const auto cleanup = [&]() {
+        cudaFree(device_counts);
+        cudaFree(device_queries);
+    };
+
+    const std::size_t query_bytes =
+        queries.size() *
+        sizeof(GpuTripletKey);
+
+    const std::size_t count_bytes =
+        queries.size() *
+        sizeof(std::uint32_t);
+
+    if (
+        cudaMalloc(
+            reinterpret_cast<void**>(&device_queries),
+            query_bytes
+        ) != cudaSuccess ||
+        cudaMalloc(
+            reinterpret_cast<void**>(&device_counts),
+            count_bytes
+        ) != cudaSuccess
+    ) {
+        cleanup();
+        return false;
+    }
+
+    if (
+        cudaMemcpy(
+            device_queries,
+            queries.data(),
+            query_bytes,
+            cudaMemcpyHostToDevice
+        ) != cudaSuccess
+    ) {
+        cleanup();
+        return false;
+    }
+
+    const std::uint32_t query_count =
+        static_cast<std::uint32_t>(
+            queries.size()
+        );
+
+    constexpr std::uint32_t block_size = 256;
+
+    const std::uint32_t block_count =
+        (query_count - 1) / block_size + 1;
+
+    // Reuse the existing neighbor counting kernel.
+    triplet_neighbor_count_kernel
+        <<<block_count, block_size>>>(
+            device_index.keys,
+            device_index.offsets,
+            device_index.key_count,
+            device_queries,
+            query_count,
+            device_counts
+        );
+
+    if (
+        cudaGetLastError() != cudaSuccess ||
+        cudaDeviceSynchronize() != cudaSuccess
+    ) {
+        cleanup();
+        return false;
+    }
+
+    // Queries are no longer needed, but the counts
+    // must remain device-resident.
+    cudaFree(device_queries);
+
+    counts.counts = device_counts;
+    counts.count = query_count;
+
+    return true;
+}
+
+
+bool cuda_download_triplet_neighbor_counts(
+    const GpuTripletNeighborCountArrayDevice& device_counts,
+    std::vector<std::uint32_t>& host_counts
+)
+{
+    host_counts.clear();
+
+    if (device_counts.count == 0)
+        return device_counts.counts == nullptr;
+
+    if (device_counts.counts == nullptr)
+        return false;
+
+    const std::size_t count_bytes =
+        static_cast<std::size_t>(
+            device_counts.count
+        ) *
+        sizeof(std::uint32_t);
+
+    host_counts.resize(device_counts.count);
+
+    if (
+        cudaMemcpy(
+            host_counts.data(),
+            device_counts.counts,
+            count_bytes,
+            cudaMemcpyDeviceToHost
+        ) != cudaSuccess
+    ) {
+        host_counts.clear();
+        return false;
+    }
+
+    return true;
+}
+
+
+void cuda_free_triplet_neighbor_counts(
+    GpuTripletNeighborCountArrayDevice& counts
+)
+{
+    cudaFree(counts.counts);
+    counts = {};
+}
+
+
 bool cuda_count_triplet_neighbor_records(
     const GpuFlatTripletIndexDevice& device_index,
     const std::vector<GpuTripletKey>& queries,
@@ -1292,6 +1477,195 @@ bool cuda_exclusive_prefix_sum(
 
     return true;
 }
+
+bool cuda_expand_triplet_neighbor_records_device(
+    const GpuFlatTripletIndexDevice& device_index,
+    const std::vector<GpuTripletKey>& queries,
+    const GpuTripletNeighborCountArrayDevice& device_counts,
+    const GpuTripletNeighborOffsetArrayDevice& device_offsets,
+    GpuTripletCandidateArrayDevice& candidates
+)
+{
+    if (
+        candidates.candidates != nullptr ||
+        candidates.count != 0 ||
+        queries.size() >=
+            std::numeric_limits<std::uint32_t>::max() ||
+        queries.size() != device_counts.count ||
+        (device_counts.count == 0 &&
+            device_counts.counts != nullptr) ||
+        (device_counts.count > 0 &&
+            device_counts.counts == nullptr) ||
+        device_offsets.offsets == nullptr ||
+        device_offsets.count != device_counts.count + 1
+    ) {
+        return false;
+    }
+
+    // Read only the final offset to determine output size.
+    // The complete offsets array stays on the GPU.
+    std::uint32_t total_candidates = 0;
+
+    if (
+        cudaMemcpy(
+            &total_candidates,
+            device_offsets.offsets + device_counts.count,
+            sizeof(std::uint32_t),
+            cudaMemcpyDeviceToHost
+        ) != cudaSuccess
+    ) {
+        return false;
+    }
+
+    if (queries.empty())
+        return total_candidates == 0;
+
+    if (
+        device_index.keys == nullptr ||
+        device_index.offsets == nullptr ||
+        (
+            device_index.record_count > 0 &&
+            device_index.records == nullptr
+        )
+    ) {
+        return false;
+    }
+
+    GpuTripletKey* device_queries = nullptr;
+    std::uint32_t* device_invalid = nullptr;
+    GpuTripletCandidate* device_candidates = nullptr;
+
+    const auto cleanup = [&]() {
+        cudaFree(device_candidates);
+        cudaFree(device_invalid);
+        cudaFree(device_queries);
+    };
+
+    const std::size_t query_bytes =
+        queries.size() * sizeof(GpuTripletKey);
+
+    if (
+        cudaMalloc(
+            reinterpret_cast<void**>(&device_queries),
+            query_bytes
+        ) != cudaSuccess ||
+        cudaMalloc(
+            reinterpret_cast<void**>(&device_invalid),
+            sizeof(std::uint32_t)
+        ) != cudaSuccess
+    ) {
+        cleanup();
+        return false;
+    }
+
+    if (
+        cudaMemcpy(
+            device_queries,
+            queries.data(),
+            query_bytes,
+            cudaMemcpyHostToDevice
+        ) != cudaSuccess ||
+        cudaMemset(
+            device_invalid,
+            0,
+            sizeof(std::uint32_t)
+        ) != cudaSuccess
+    ) {
+        cleanup();
+        return false;
+    }
+
+    const std::uint32_t query_count =
+        static_cast<std::uint32_t>(queries.size());
+
+    constexpr std::uint32_t block_size = 256;
+
+    const std::uint32_t block_count =
+        (query_count - 1) / block_size + 1;
+
+    // Verify GPU offsets before any candidate write.
+    validate_device_triplet_candidate_offsets_kernel
+        <<<block_count, block_size>>>(
+            device_counts.counts,
+            device_offsets.offsets,
+            query_count,
+            device_invalid
+        );
+
+    if (
+        cudaGetLastError() != cudaSuccess ||
+        cudaDeviceSynchronize() != cudaSuccess
+    ) {
+        cleanup();
+        return false;
+    }
+
+    std::uint32_t invalid = 0;
+
+    if (
+        cudaMemcpy(
+            &invalid,
+            device_invalid,
+            sizeof(std::uint32_t),
+            cudaMemcpyDeviceToHost
+        ) != cudaSuccess ||
+        invalid != 0
+    ) {
+        cleanup();
+        return false;
+    }
+
+    // Valid input may contain no candidates.
+    if (total_candidates == 0) {
+        cleanup();
+        return true;
+    }
+
+    const std::size_t candidate_bytes =
+        static_cast<std::size_t>(total_candidates) *
+        sizeof(GpuTripletCandidate);
+
+    if (
+        cudaMalloc(
+            reinterpret_cast<void**>(&device_candidates),
+            candidate_bytes
+        ) != cudaSuccess
+    ) {
+        cleanup();
+        return false;
+    }
+
+    // Existing kernel: no changes to matching logic.
+    triplet_neighbor_expand_kernel
+        <<<block_count, block_size>>>(
+            device_index.keys,
+            device_index.offsets,
+            device_index.records,
+            device_index.key_count,
+            device_queries,
+            query_count,
+            device_offsets.offsets,
+            device_candidates
+        );
+
+    if (
+        cudaGetLastError() != cudaSuccess ||
+        cudaDeviceSynchronize() != cudaSuccess
+    ) {
+        cleanup();
+        return false;
+    }
+
+    candidates.candidates = device_candidates;
+    candidates.count = total_candidates;
+
+    // Ownership transferred to the caller.
+    device_candidates = nullptr;
+
+    cleanup();
+    return true;
+}
+
 
 bool cuda_expand_triplet_neighbor_records_device(
     const GpuFlatTripletIndexDevice& device_index,
@@ -2205,6 +2579,81 @@ bool cuda_count_alignment_candidates(
 
 
     return true;
+}
+
+
+bool cuda_exclusive_triplet_neighbor_prefix_sum_device(
+    const GpuTripletNeighborCountArrayDevice& counts,
+    GpuTripletNeighborOffsetArrayDevice& offsets
+)
+{
+    if (
+        offsets.offsets != nullptr ||
+        offsets.count != 0
+    ) {
+        return false;
+    }
+
+    // Non-owning view of the existing GPU counts.
+    // The scan must not free the input buffer.
+    const GpuAlignmentCountArrayDevice scan_counts{
+        counts.counts,
+        counts.count
+    };
+
+    GpuAlignmentOffsetArrayDevice scan_offsets{};
+
+    // Reuse the validated CUB implementation,
+    // including empty input and overflow checks.
+    if (
+        !cuda_exclusive_prefix_sum_device(
+            scan_counts,
+            scan_offsets
+        )
+    ) {
+        return false;
+    }
+
+    // Transfer ownership of the resulting GPU
+    // buffer to the neighbor-offset structure.
+    offsets.offsets = scan_offsets.offsets;
+    offsets.count = scan_offsets.count;
+
+    scan_offsets = {};
+
+    return true;
+}
+
+
+bool cuda_download_triplet_neighbor_offsets(
+    const GpuTripletNeighborOffsetArrayDevice& device_offsets,
+    std::vector<std::uint32_t>& host_offsets
+)
+{
+    const GpuAlignmentOffsetArrayDevice scan_offsets{
+        device_offsets.offsets,
+        device_offsets.count
+    };
+
+    return cuda_download_alignment_offsets(
+        scan_offsets,
+        host_offsets
+    );
+}
+
+
+void cuda_free_triplet_neighbor_offsets(
+    GpuTripletNeighborOffsetArrayDevice& offsets
+)
+{
+    GpuAlignmentOffsetArrayDevice scan_offsets{
+        offsets.offsets,
+        offsets.count
+    };
+
+    cuda_free_alignment_offsets(scan_offsets);
+
+    offsets = {};
 }
 
 
