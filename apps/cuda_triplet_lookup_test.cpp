@@ -1,3 +1,5 @@
+#include <cstring>
+#include <cuda_runtime_api.h>
 #include "cuda_backend.hpp"
 
 #include <cstdint>
@@ -648,6 +650,119 @@ int main()
     }
 
 
+    // ========================================================
+    // Device-native alignment counting equivalence
+    // ========================================================
+
+    {
+        GpuTripletCandidateArrayDevice
+            device_candidates{};
+
+        GpuAlignmentCountArrayDevice
+            device_counts{};
+
+        const auto fail = [&](const char* message) {
+            cuda_free_alignment_counts(device_counts);
+            cuda_free_triplet_candidates(device_candidates);
+            cuda_free_triplet_index(device_index);
+
+            std::cerr << message << '\n';
+            return 1;
+        };
+
+        if (
+            !cuda_expand_triplet_neighbor_records_device(
+                device_index,
+                count_queries,
+                candidate_offsets,
+                device_candidates
+            )
+        ) {
+            return fail(
+                "CUDA device candidate expansion failed"
+            );
+        }
+
+        if (
+            !cuda_count_alignment_candidates_device(
+                device_candidates,
+                ligand_orders,
+                device_counts
+            )
+        ) {
+            return fail(
+                "CUDA device alignment counting failed"
+            );
+        }
+
+        std::vector<std::uint32_t>
+            downloaded_counts;
+
+        if (
+            !cuda_download_alignment_counts(
+                device_counts,
+                downloaded_counts
+            )
+            ||
+            device_counts.count != alignment_counts.size()
+            ||
+            downloaded_counts != alignment_counts
+            ||
+            downloaded_counts != expected_alignment_counts
+        ) {
+            return fail(
+                "CUDA device alignment count mismatch"
+            );
+        }
+
+        cuda_free_alignment_counts(device_counts);
+
+        if (
+            device_counts.counts != nullptr ||
+            device_counts.count != 0
+        ) {
+            return fail(
+                "CUDA alignment count cleanup failed"
+            );
+        }
+
+        // Candidate 2 references ligand triplet 1.
+        // With only triplet 0 available, counting must fail.
+        const std::vector<GpuLigandTripletOrders>
+            truncated_orders{ligand_orders[0]};
+
+        if (
+            cuda_count_alignment_candidates_device(
+                device_candidates,
+                truncated_orders,
+                device_counts
+            )
+            ||
+            device_counts.counts != nullptr
+            ||
+            device_counts.count != 0
+        ) {
+            return fail(
+                "CUDA invalid ligand triplet index not rejected"
+            );
+        }
+
+        cuda_free_triplet_candidates(device_candidates);
+
+        if (
+            device_candidates.candidates != nullptr ||
+            device_candidates.count != 0
+        ) {
+            return fail(
+                "CUDA triplet candidate cleanup failed"
+            );
+        }
+
+        std::cout
+            << "CUDA device alignment counting equivalence passed\n";
+    }
+
+
     std::vector<std::uint32_t>
         alignment_offsets;
 
@@ -690,6 +805,411 @@ int main()
         );
 
         return 1;
+    }
+
+
+    // ========================================================
+    // Device-native alignment prefix scan equivalence
+    // ========================================================
+
+    {
+        GpuTripletCandidateArrayDevice device_candidates{};
+        GpuAlignmentCountArrayDevice device_counts{};
+        GpuAlignmentOffsetArrayDevice device_offsets{};
+
+        GpuAlignmentOffsetArrayDevice empty_offsets{};
+
+        GpuAlignmentCountArrayDevice overflow_counts{};
+        GpuAlignmentOffsetArrayDevice overflow_offsets{};
+
+        const auto release = [&]() {
+            cuda_free_alignment_offsets(overflow_offsets);
+            cuda_free_alignment_counts(overflow_counts);
+            cuda_free_alignment_offsets(empty_offsets);
+            cuda_free_alignment_offsets(device_offsets);
+            cuda_free_alignment_counts(device_counts);
+            cuda_free_triplet_candidates(device_candidates);
+        };
+
+        const auto fail = [&](const char* message) {
+            release();
+            cuda_free_triplet_index(device_index);
+            std::cerr << message << '\n';
+            return 1;
+        };
+
+        if (
+            !cuda_expand_triplet_neighbor_records_device(
+                device_index,
+                count_queries,
+                candidate_offsets,
+                device_candidates
+            )
+        ) {
+            return fail("Device candidate expansion failed");
+        }
+
+        if (
+            !cuda_count_alignment_candidates_device(
+                device_candidates,
+                ligand_orders,
+                device_counts
+            )
+        ) {
+            return fail("Device alignment counting failed");
+        }
+
+        if (
+            !cuda_exclusive_prefix_sum_device(
+                device_counts,
+                device_offsets
+            )
+        ) {
+            return fail("Device alignment prefix scan failed");
+        }
+
+        std::vector<std::uint32_t> downloaded_offsets;
+
+        if (
+            !cuda_download_alignment_offsets(
+                device_offsets,
+                downloaded_offsets
+            )
+            ||
+            device_offsets.count !=
+                expected_alignment_offsets.size()
+            ||
+            downloaded_offsets != alignment_offsets
+            ||
+            downloaded_offsets != expected_alignment_offsets
+        ) {
+            return fail("Device alignment offsets mismatch");
+        }
+
+        // Empty counts must produce offsets = [0].
+        GpuAlignmentCountArrayDevice empty_counts{};
+
+        if (
+            !cuda_exclusive_prefix_sum_device(
+                empty_counts,
+                empty_offsets
+            )
+        ) {
+            return fail("Empty device scan failed");
+        }
+
+        std::vector<std::uint32_t> downloaded_empty;
+
+        if (
+            !cuda_download_alignment_offsets(
+                empty_offsets,
+                downloaded_empty
+            )
+            ||
+            downloaded_empty !=
+                std::vector<std::uint32_t>{0}
+        ) {
+            return fail("Empty device scan mismatch");
+        }
+
+        // Overflow: UINT32_MAX + 1 must be rejected.
+        const std::uint32_t overflow_input[2] = {
+            ~std::uint32_t{0},
+            1
+        };
+
+        if (
+            cudaMalloc(
+                reinterpret_cast<void**>(
+                    &overflow_counts.counts
+                ),
+                sizeof(overflow_input)
+            ) != cudaSuccess
+        ) {
+            return fail("Overflow test allocation failed");
+        }
+
+        overflow_counts.count = 2;
+
+        if (
+            cudaMemcpy(
+                overflow_counts.counts,
+                overflow_input,
+                sizeof(overflow_input),
+                cudaMemcpyHostToDevice
+            ) != cudaSuccess
+        ) {
+            return fail("Overflow test upload failed");
+        }
+
+        if (
+            cuda_exclusive_prefix_sum_device(
+                overflow_counts,
+                overflow_offsets
+            )
+            ||
+            overflow_offsets.offsets != nullptr
+            ||
+            overflow_offsets.count != 0
+        ) {
+            return fail("Device scan overflow not rejected");
+        }
+
+        release();
+
+        if (
+            device_candidates.candidates != nullptr ||
+            device_candidates.count != 0 ||
+            device_counts.counts != nullptr ||
+            device_counts.count != 0 ||
+            device_offsets.offsets != nullptr ||
+            device_offsets.count != 0 ||
+            empty_offsets.offsets != nullptr ||
+            empty_offsets.count != 0 ||
+            overflow_counts.counts != nullptr ||
+            overflow_counts.count != 0
+        ) {
+            cuda_free_triplet_index(device_index);
+            std::cerr << "Device scan cleanup failed\n";
+            return 1;
+        }
+
+        std::cout
+            << "CUDA device alignment prefix scan equivalence passed\n";
+    }
+
+
+    // ========================================================
+    // Device-native alignment expansion equivalence
+    // ========================================================
+
+    {
+        GpuTripletCandidateArrayDevice device_candidates{};
+        GpuAlignmentCountArrayDevice device_counts{};
+        GpuAlignmentOffsetArrayDevice device_offsets{};
+        GpuAlignmentCandidateArrayDevice device_alignments{};
+
+        GpuAlignmentOffsetArrayDevice modified_offsets{};
+        GpuAlignmentOffsetArrayDevice empty_offsets{};
+
+        const auto release = [&]() {
+            cuda_free_alignment_candidates(device_alignments);
+            cuda_free_alignment_offsets(empty_offsets);
+            cuda_free_alignment_offsets(modified_offsets);
+            cuda_free_alignment_offsets(device_offsets);
+            cuda_free_alignment_counts(device_counts);
+            cuda_free_triplet_candidates(device_candidates);
+        };
+
+        const auto fail = [&](const char* message) {
+            release();
+            cuda_free_triplet_index(device_index);
+            std::cerr << message << '\n';
+            return 1;
+        };
+
+        // Independent reference from the existing host API.
+        std::vector<GpuAlignmentCandidate> reference_alignments;
+
+        if (
+            !cuda_expand_alignment_candidates(
+                candidates,
+                ligand_orders,
+                alignment_offsets,
+                reference_alignments
+            )
+        ) {
+            return fail("Legacy alignment expansion failed");
+        }
+
+        if (
+            !cuda_expand_triplet_neighbor_records_device(
+                device_index,
+                count_queries,
+                candidate_offsets,
+                device_candidates
+            )
+        ) {
+            return fail("Device triplet expansion failed");
+        }
+
+        if (
+            !cuda_count_alignment_candidates_device(
+                device_candidates,
+                ligand_orders,
+                device_counts
+            )
+        ) {
+            return fail("Device alignment counting failed");
+        }
+
+        if (
+            !cuda_exclusive_prefix_sum_device(
+                device_counts,
+                device_offsets
+            )
+        ) {
+            return fail("Device alignment scan failed");
+        }
+
+        if (
+            !cuda_expand_alignment_candidates_device(
+                device_candidates,
+                ligand_orders,
+                device_offsets,
+                device_alignments
+            )
+        ) {
+            return fail("Device-native alignment expansion failed");
+        }
+
+        std::vector<GpuAlignmentCandidate> downloaded_alignments;
+
+        if (
+            !cuda_download_alignment_candidates(
+                device_alignments,
+                downloaded_alignments
+            )
+            ||
+            device_alignments.count != reference_alignments.size()
+            ||
+            downloaded_alignments.size() != reference_alignments.size()
+            ||
+            downloaded_alignments.size() != 5
+        ) {
+            return fail("Device-native alignment count mismatch");
+        }
+
+        // Both paths run the same expansion kernel. Compare
+        // the complete GPU-generated output records bytewise.
+        for (std::size_t i = 0; i < reference_alignments.size(); ++i) {
+            if (
+                std::memcmp(
+                    &reference_alignments[i],
+                    &downloaded_alignments[i],
+                    sizeof(GpuAlignmentCandidate)
+                ) != 0
+            ) {
+                return fail("Device-native alignment record mismatch");
+            }
+        }
+
+        cuda_free_alignment_candidates(device_alignments);
+
+        // Invalid ligand triplet index must be rejected.
+        const std::vector<GpuLigandTripletOrders>
+            truncated_orders{ligand_orders[0]};
+
+        if (
+            cuda_expand_alignment_candidates_device(
+                device_candidates,
+                truncated_orders,
+                device_offsets,
+                device_alignments
+            )
+            ||
+            device_alignments.alignments != nullptr
+            ||
+            device_alignments.count != 0
+        ) {
+            return fail("Invalid ligand triplet index not rejected");
+        }
+
+        // Corrupt one intermediate offset.
+        std::vector<std::uint32_t> invalid_host_offsets =
+            alignment_offsets;
+
+        invalid_host_offsets[1] = 1;
+
+        const std::size_t offset_bytes =
+            invalid_host_offsets.size() * sizeof(std::uint32_t);
+
+        if (
+            cudaMalloc(
+                reinterpret_cast<void**>(&modified_offsets.offsets),
+                offset_bytes
+            ) != cudaSuccess
+        ) {
+            return fail("Invalid offset allocation failed");
+        }
+
+        modified_offsets.count =
+            static_cast<std::uint32_t>(invalid_host_offsets.size());
+
+        if (
+            cudaMemcpy(
+                modified_offsets.offsets,
+                invalid_host_offsets.data(),
+                offset_bytes,
+                cudaMemcpyHostToDevice
+            ) != cudaSuccess
+        ) {
+            return fail("Invalid offset upload failed");
+        }
+
+        if (
+            cuda_expand_alignment_candidates_device(
+                device_candidates,
+                ligand_orders,
+                modified_offsets,
+                device_alignments
+            )
+            ||
+            device_alignments.alignments != nullptr
+            ||
+            device_alignments.count != 0
+        ) {
+            return fail("Invalid alignment offsets not rejected");
+        }
+
+        // Empty candidates and offsets [0] must succeed
+        // without allocating alignment output.
+        GpuAlignmentCountArrayDevice empty_counts{};
+        GpuTripletCandidateArrayDevice empty_candidates{};
+
+        if (
+            !cuda_exclusive_prefix_sum_device(
+                empty_counts,
+                empty_offsets
+            )
+            ||
+            !cuda_expand_alignment_candidates_device(
+                empty_candidates,
+                ligand_orders,
+                empty_offsets,
+                device_alignments
+            )
+            ||
+            device_alignments.alignments != nullptr
+            ||
+            device_alignments.count != 0
+        ) {
+            return fail("Empty device-native expansion failed");
+        }
+
+        release();
+
+        if (
+            device_candidates.candidates != nullptr ||
+            device_candidates.count != 0 ||
+            device_counts.counts != nullptr ||
+            device_counts.count != 0 ||
+            device_offsets.offsets != nullptr ||
+            device_offsets.count != 0 ||
+            device_alignments.alignments != nullptr ||
+            device_alignments.count != 0 ||
+            modified_offsets.offsets != nullptr ||
+            modified_offsets.count != 0 ||
+            empty_offsets.offsets != nullptr ||
+            empty_offsets.count != 0
+        ) {
+            cuda_free_triplet_index(device_index);
+            std::cerr << "Device-native expansion cleanup failed\n";
+            return 1;
+        }
+
+        std::cout
+            << "CUDA device-native alignment expansion equivalence passed\n";
     }
 
 

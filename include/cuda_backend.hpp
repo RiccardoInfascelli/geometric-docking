@@ -156,6 +156,65 @@ bool cuda_expand_triplet_neighbor_records(
 );
 
 
+struct GpuAlignmentCountArrayDevice
+{
+    std::uint32_t* counts{nullptr};
+    std::uint32_t count{};
+};
+
+
+bool cuda_count_alignment_candidates_device(
+    const GpuTripletCandidateArrayDevice& candidates,
+    const std::vector<GpuLigandTripletOrders>& ligand_orders,
+    GpuAlignmentCountArrayDevice& counts
+);
+
+
+bool cuda_download_alignment_counts(
+    const GpuAlignmentCountArrayDevice& device_counts,
+    std::vector<std::uint32_t>& host_counts
+);
+
+
+void cuda_free_alignment_counts(
+    GpuAlignmentCountArrayDevice& counts
+);
+
+
+struct GpuAlignmentOffsetArrayDevice
+{
+    std::uint32_t* offsets{nullptr};
+    std::uint32_t count{};
+};
+
+
+bool cuda_exclusive_prefix_sum_device(
+    const GpuAlignmentCountArrayDevice& counts,
+    GpuAlignmentOffsetArrayDevice& offsets
+);
+
+
+bool cuda_download_alignment_offsets(
+    const GpuAlignmentOffsetArrayDevice& device_offsets,
+    std::vector<std::uint32_t>& host_offsets
+);
+
+
+void cuda_free_alignment_offsets(
+    GpuAlignmentOffsetArrayDevice& offsets
+);
+
+
+bool cuda_expand_alignment_candidates_device(
+    const GpuTripletCandidateArrayDevice& candidates,
+    const std::vector<GpuLigandTripletOrders>& ligand_orders,
+    const GpuAlignmentOffsetArrayDevice& alignment_offsets,
+    GpuAlignmentCandidateArrayDevice& alignments
+);
+
+
+
+
 bool cuda_count_alignment_candidates(
     const std::vector<GpuTripletCandidate>& candidates,
     const std::vector<GpuLigandTripletOrders>& ligand_orders,

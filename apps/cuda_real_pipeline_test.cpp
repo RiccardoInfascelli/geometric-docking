@@ -338,6 +338,12 @@ int main(
     GpuTripletCandidateArrayDevice
         device_triplet_candidates{};
 
+    GpuAlignmentCountArrayDevice
+        device_alignment_counts{};
+
+    GpuAlignmentOffsetArrayDevice
+        device_alignment_offsets{};
+
     GpuAlignmentCandidateArrayDevice
         device_alignments{};
 
@@ -345,12 +351,20 @@ int main(
     const auto cleanup =
         [&]()
         {
-            cuda_free_triplet_candidates(
-                device_triplet_candidates
-            );
-
             cuda_free_alignment_candidates(
                 device_alignments
+            );
+
+            cuda_free_alignment_offsets(
+                device_alignment_offsets
+            );
+
+            cuda_free_alignment_counts(
+                device_alignment_counts
+            );
+
+            cuda_free_triplet_candidates(
+                device_triplet_candidates
             );
 
             cuda_free_fast_matching_areas(
@@ -663,35 +677,122 @@ int main(
         // Equivalent-order expansion
         // ====================================================
 
+        if (
+            !cuda_count_alignment_candidates_device(
+                device_triplet_candidates,
+                ligand_orders,
+                device_alignment_counts
+            )
+        ) {
+            throw std::runtime_error(
+                "CUDA device alignment counting failed"
+            );
+        }
+
+
+        // Temporary download for CPU/GPU validation
+        // and the existing alignment prefix scan.
         std::vector<std::uint32_t>
             alignment_counts;
 
 
         if (
-            !cuda_count_alignment_candidates(
-                triplet_candidates,
-                ligand_orders,
+            !cuda_download_alignment_counts(
+                device_alignment_counts,
                 alignment_counts
             )
         ) {
             throw std::runtime_error(
-                "CUDA alignment counting failed"
+                "CUDA alignment count download failed"
             );
         }
 
 
+        if (
+            device_alignment_counts.count !=
+                triplet_candidates.size()
+            ||
+            alignment_counts.size() !=
+                triplet_candidates.size()
+        ) {
+            throw std::runtime_error(
+                "CUDA alignment count size mismatch"
+            );
+        }
+
+
+        if (
+            !cuda_exclusive_prefix_sum_device(
+                device_alignment_counts,
+                device_alignment_offsets
+            )
+        ) {
+            throw std::runtime_error(
+                "CUDA device alignment prefix sum failed"
+            );
+        }
+
+
+        // Temporary download for alignment expansion
+        // and numerical correctness validation.
         std::vector<std::uint32_t>
             alignment_offsets;
 
 
         if (
-            !cuda_exclusive_prefix_sum(
-                alignment_counts,
+            !cuda_download_alignment_offsets(
+                device_alignment_offsets,
                 alignment_offsets
             )
         ) {
             throw std::runtime_error(
-                "CUDA alignment prefix sum failed"
+                "CUDA alignment offset download failed"
+            );
+        }
+
+
+        if (
+            device_alignment_offsets.count !=
+                alignment_counts.size() + 1
+            ||
+            alignment_offsets.size() !=
+                alignment_counts.size() + 1
+        ) {
+            throw std::runtime_error(
+                "CUDA alignment offset size mismatch"
+            );
+        }
+
+
+        // Validate every GPU prefix offset against
+        // an independent CPU cumulative sum.
+        std::uint64_t expected_offset = 0;
+
+        for (
+            std::size_t i = 0;
+            i < alignment_counts.size();
+            ++i
+        ) {
+            if (
+                alignment_offsets[i] !=
+                expected_offset
+            ) {
+                throw std::runtime_error(
+                    "CPU/GPU alignment prefix mismatch"
+                );
+            }
+
+            expected_offset +=
+                alignment_counts[i];
+        }
+
+
+        if (
+            alignment_offsets.back() !=
+            expected_offset
+        ) {
+            throw std::runtime_error(
+                "CPU/GPU final alignment offset mismatch"
             );
         }
 
@@ -701,9 +802,9 @@ int main(
 
         if (
             !cuda_expand_alignment_candidates_device(
-                triplet_candidates,
+                device_triplet_candidates,
                 ligand_orders,
-                alignment_offsets,
+                device_alignment_offsets,
                 device_alignments
             )
         ) {
