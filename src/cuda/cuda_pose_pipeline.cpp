@@ -128,9 +128,6 @@ bool cuda_run_pose_pipeline(
 
         // ========================================================
     // 3. GPU clash compaction
-    //
-    // Keep only valid transforms below the clash threshold.
-    // The full transform/clash arrays remain on the GPU.
     // ========================================================
 
     GpuClashSurvivorArrayDevice
@@ -170,7 +167,7 @@ bool cuda_run_pose_pipeline(
         device_survivors.count;
 
 
-    // Full Kabsch/clash arrays are no longer needed.
+    // Full pre-compaction arrays are no longer needed.
     cuda_free_clash_scores(
         device_clash_scores
     );
@@ -182,7 +179,7 @@ bool cuda_run_pose_pipeline(
 
 
     if (
-        result.clash_survivor_count == 0
+        device_survivors.count == 0
     ) {
         cuda_free_clash_survivors(
             device_survivors
@@ -193,10 +190,54 @@ bool cuda_run_pose_pipeline(
 
 
     // ========================================================
-    // Temporary survivor download
-    //
-    // Fast scoring still uses the legacy host-vector API.
-    // Therefore only the compacted survivor set is downloaded.
+    // 4. Device-resident fast interaction scoring
+    // ========================================================
+
+    const GpuRigidTransformArrayDevice
+        survivor_transform_view{
+            device_survivors.transforms,
+            device_survivors.count
+        };
+
+
+    GpuFastScoreArrayDevice
+        device_fast_scores{};
+
+
+    if (
+        !cuda_score_fast_interactions_device(
+            ligand_fast_areas,
+            protein_grid,
+            survivor_transform_view,
+            device_fast_scores
+        )
+    ) {
+        cuda_free_clash_survivors(
+            device_survivors
+        );
+
+        return false;
+    }
+
+
+    if (
+        device_fast_scores.count !=
+        device_survivors.count
+    ) {
+        cuda_free_fast_scores(
+            device_fast_scores
+        );
+
+        cuda_free_clash_survivors(
+            device_survivors
+        );
+
+        return false;
+    }
+
+
+    // ========================================================
+    // Final survivor download
     // ========================================================
 
     std::vector<GpuRigidTransform>
@@ -211,6 +252,10 @@ bool cuda_run_pose_pipeline(
         survivor_clash_scores;
 
 
+    std::vector<GpuFastScore>
+        fast_scores;
+
+
     if (
         !cuda_download_clash_survivors(
             device_survivors,
@@ -219,12 +264,39 @@ bool cuda_run_pose_pipeline(
             survivor_alignment_indices
         )
     ) {
+        cuda_free_fast_scores(
+            device_fast_scores
+        );
+
         cuda_free_clash_survivors(
             device_survivors
         );
 
         return false;
     }
+
+
+    if (
+        !cuda_download_fast_scores(
+            device_fast_scores,
+            fast_scores
+        )
+    ) {
+        cuda_free_fast_scores(
+            device_fast_scores
+        );
+
+        cuda_free_clash_survivors(
+            device_survivors
+        );
+
+        return false;
+    }
+
+
+    cuda_free_fast_scores(
+        device_fast_scores
+    );
 
 
     cuda_free_clash_survivors(
@@ -240,38 +312,13 @@ bool cuda_run_pose_pipeline(
             result.clash_survivor_count ||
 
         survivor_alignment_indices.size() !=
+            result.clash_survivor_count ||
+
+        fast_scores.size() !=
             result.clash_survivor_count
     ) {
         return false;
     }
-
-    // ========================================================
-    // 4. Fast interaction scoring
-    // ========================================================
-
-    std::vector<GpuFastScore>
-        fast_scores;
-
-
-    if (
-        !cuda_score_fast_interactions(
-            ligand_fast_areas,
-            protein_grid,
-            survivor_transforms,
-            fast_scores
-        )
-    ) {
-        return false;
-    }
-
-
-    if (
-        fast_scores.size() !=
-        survivor_transforms.size()
-    ) {
-        return false;
-    }
-
 
     // ========================================================
     // 5. Assemble surviving poses

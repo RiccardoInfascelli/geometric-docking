@@ -270,12 +270,28 @@ void cuda_free_fast_matching_areas(
 
 // ============================================================
 // Fast interaction scoring
-//
-// We keep the current host-vector API for now.
-// A device-resident scoring path will be connected after
-// GPU clash filtering/compaction is implemented.
 // ============================================================
 
+bool cuda_score_fast_interactions_device(
+    const GpuFastMatchingAreaArrayDevice& ligand_areas,
+    const GpuProteinGridDevice& protein_grid,
+    const GpuRigidTransformArrayDevice& transforms,
+    GpuFastScoreArrayDevice& scores
+);
+
+
+bool cuda_download_fast_scores(
+    const GpuFastScoreArrayDevice& device_scores,
+    std::vector<GpuFastScore>& host_scores
+);
+
+
+void cuda_free_fast_scores(
+    GpuFastScoreArrayDevice& scores
+);
+
+
+// Legacy host-vector API.
 bool cuda_score_fast_interactions(
     const GpuFastMatchingAreaArrayDevice& ligand_areas,
     const GpuProteinGridDevice& protein_grid,

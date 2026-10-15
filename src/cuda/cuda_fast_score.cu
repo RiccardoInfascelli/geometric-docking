@@ -356,18 +356,27 @@ bool cuda_upload_fast_matching_areas(
 }
 
 
-bool cuda_score_fast_interactions(
+bool cuda_score_fast_interactions_device(
     const GpuFastMatchingAreaArrayDevice& ligand_areas,
     const GpuProteinGridDevice& protein_grid,
-    const std::vector<GpuRigidTransform>& transforms,
-    std::vector<GpuFastScore>& scores
+    const GpuRigidTransformArrayDevice& transforms,
+    GpuFastScoreArrayDevice& scores
 )
 {
-    scores.clear();
+    cuda_free_fast_scores(
+        scores
+    );
 
 
-    if (transforms.empty())
+    if (transforms.count == 0)
         return true;
+
+
+    if (
+        transforms.transforms == nullptr
+    ) {
+        return false;
+    }
 
 
     if (
@@ -386,46 +395,16 @@ bool cuda_score_fast_interactions(
     }
 
 
-    if (
-        transforms.size() >
-        std::numeric_limits<
-            std::uint32_t
-        >::max()
-    ) {
-        return false;
-    }
-
-
-    GpuRigidTransform*
-        device_transforms =
-            nullptr;
-
-
     GpuFastScore*
         device_scores =
             nullptr;
 
 
-    const std::size_t transform_bytes =
-        transforms.size() *
-        sizeof(GpuRigidTransform);
-
-
     const std::size_t score_bytes =
-        transforms.size() *
+        static_cast<std::size_t>(
+            transforms.count
+        ) *
         sizeof(GpuFastScore);
-
-
-    if (
-        cudaMalloc(
-            reinterpret_cast<void**>(
-                &device_transforms
-            ),
-            transform_bytes
-        ) != cudaSuccess
-    ) {
-        return false;
-    }
 
 
     if (
@@ -436,38 +415,8 @@ bool cuda_score_fast_interactions(
             score_bytes
         ) != cudaSuccess
     ) {
-        cudaFree(
-            device_transforms
-        );
-
         return false;
     }
-
-
-    if (
-        cudaMemcpy(
-            device_transforms,
-            transforms.data(),
-            transform_bytes,
-            cudaMemcpyHostToDevice
-        ) != cudaSuccess
-    ) {
-        cudaFree(
-            device_scores
-        );
-
-        cudaFree(
-            device_transforms
-        );
-
-        return false;
-    }
-
-
-    const std::uint32_t transform_count =
-        static_cast<std::uint32_t>(
-            transforms.size()
-        );
 
 
     constexpr std::uint32_t block_size =
@@ -476,7 +425,7 @@ bool cuda_score_fast_interactions(
 
     const std::uint32_t block_count =
         (
-            transform_count +
+            transforms.count +
             block_size - 1
         ) /
         block_size;
@@ -487,8 +436,8 @@ bool cuda_score_fast_interactions(
             ligand_areas.areas,
             ligand_areas.count,
             protein_grid,
-            device_transforms,
-            transform_count,
+            transforms.transforms,
+            transforms.count,
             device_scores
         );
 
@@ -503,34 +452,147 @@ bool cuda_score_fast_interactions(
             device_scores
         );
 
-        cudaFree(
-            device_transforms
-        );
-
         return false;
     }
 
 
-    scores.resize(
-        transforms.size()
+    scores.scores =
+        device_scores;
+
+    scores.count =
+        transforms.count;
+
+
+    return true;
+}
+
+
+bool cuda_download_fast_scores(
+    const GpuFastScoreArrayDevice& device_scores,
+    std::vector<GpuFastScore>& host_scores
+)
+{
+    host_scores.clear();
+
+
+    if (device_scores.count == 0)
+        return true;
+
+
+    if (
+        device_scores.scores == nullptr
+    ) {
+        return false;
+    }
+
+
+    host_scores.resize(
+        device_scores.count
     );
+
+
+    const std::size_t score_bytes =
+        static_cast<std::size_t>(
+            device_scores.count
+        ) *
+        sizeof(GpuFastScore);
 
 
     if (
         cudaMemcpy(
-            scores.data(),
-            device_scores,
+            host_scores.data(),
+            device_scores.scores,
             score_bytes,
             cudaMemcpyDeviceToHost
         ) != cudaSuccess
     ) {
-        scores.clear();
+        host_scores.clear();
 
-        cudaFree(
-            device_scores
+        return false;
+    }
+
+
+    return true;
+}
+
+
+void cuda_free_fast_scores(
+    GpuFastScoreArrayDevice& scores
+)
+{
+    cudaFree(
+        scores.scores
+    );
+
+
+    scores.scores =
+        nullptr;
+
+    scores.count =
+        0;
+}
+
+
+bool cuda_score_fast_interactions(
+    const GpuFastMatchingAreaArrayDevice& ligand_areas,
+    const GpuProteinGridDevice& protein_grid,
+    const std::vector<GpuRigidTransform>& transforms,
+    std::vector<GpuFastScore>& scores
+)
+{
+    scores.clear();
+
+
+    if (
+        transforms.size() >
+        std::numeric_limits<
+            std::uint32_t
+        >::max()
+    ) {
+        return false;
+    }
+
+
+    if (transforms.empty())
+        return true;
+
+
+    GpuRigidTransformArrayDevice
+        device_transforms{};
+
+
+    const std::size_t transform_bytes =
+        transforms.size() *
+        sizeof(GpuRigidTransform);
+
+
+    if (
+        cudaMalloc(
+            reinterpret_cast<void**>(
+                &device_transforms.transforms
+            ),
+            transform_bytes
+        ) != cudaSuccess
+    ) {
+        return false;
+    }
+
+
+    device_transforms.count =
+        static_cast<std::uint32_t>(
+            transforms.size()
         );
 
-        cudaFree(
+
+    if (
+        cudaMemcpy(
+            device_transforms.transforms,
+            transforms.data(),
+            transform_bytes,
+            cudaMemcpyHostToDevice
+        ) != cudaSuccess
+    ) {
+        cuda_free_rigid_transforms(
             device_transforms
         );
 
@@ -538,14 +600,42 @@ bool cuda_score_fast_interactions(
     }
 
 
-    cudaFree(
+    GpuFastScoreArrayDevice
+        device_scores{};
+
+
+    if (
+        !cuda_score_fast_interactions_device(
+            ligand_areas,
+            protein_grid,
+            device_transforms,
+            device_scores
+        )
+    ) {
+        cuda_free_rigid_transforms(
+            device_transforms
+        );
+
+        return false;
+    }
+
+
+    const bool download_ok =
+        cuda_download_fast_scores(
+            device_scores,
+            scores
+        );
+
+
+    cuda_free_fast_scores(
         device_scores
     );
 
-    cudaFree(
+
+    cuda_free_rigid_transforms(
         device_transforms
     );
 
 
-    return true;
+    return download_ok;
 }
