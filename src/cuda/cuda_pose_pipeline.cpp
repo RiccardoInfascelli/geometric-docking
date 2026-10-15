@@ -54,20 +54,20 @@ bool cuda_run_pose_pipeline(
     }
 
 
-    // ========================================================
-    // 1. Kabsch
+        // ========================================================
+    // 1. Kabsch - device resident
     // ========================================================
 
-    std::vector<GpuRigidTransform>
-        transforms;
+    GpuRigidTransformArrayDevice
+        device_transforms;
 
 
     if (
-        !cuda_compute_kabsch_transforms(
+        !cuda_compute_kabsch_transforms_device(
             ligand_matching_points,
             protein_target_points,
             alignments,
-            transforms
+            device_transforms
         )
     ) {
         return false;
@@ -75,7 +75,123 @@ bool cuda_run_pose_pipeline(
 
 
     if (
+        device_transforms.count !=
+        alignments.size()
+    ) {
+        cuda_free_rigid_transforms(
+            device_transforms
+        );
+
+        return false;
+    }
+
+
+    // ========================================================
+    // 2. Grid clash - consume Kabsch output directly on GPU
+    // ========================================================
+
+    GpuClashScoreArrayDevice
+        device_clash_scores;
+
+
+    if (
+        !cuda_score_grid_clash_device(
+            ligand_atoms,
+            protein_grid,
+            device_transforms,
+            device_clash_scores
+        )
+    ) {
+        cuda_free_rigid_transforms(
+            device_transforms
+        );
+
+        return false;
+    }
+
+
+    if (
+        device_clash_scores.count !=
+        device_transforms.count
+    ) {
+        cuda_free_clash_scores(
+            device_clash_scores
+        );
+
+        cuda_free_rigid_transforms(
+            device_transforms
+        );
+
+        return false;
+    }
+
+
+    // ========================================================
+    // Temporary host download
+    //
+    // For now filtering remains on CPU.
+    // The important change is that there is no host round-trip
+    // between Kabsch and clash anymore.
+    // ========================================================
+
+    std::vector<GpuRigidTransform>
+        transforms;
+
+
+    std::vector<GpuClashScore>
+        clash_scores;
+
+
+    if (
+        !cuda_download_rigid_transforms(
+            device_transforms,
+            transforms
+        )
+    ) {
+        cuda_free_clash_scores(
+            device_clash_scores
+        );
+
+        cuda_free_rigid_transforms(
+            device_transforms
+        );
+
+        return false;
+    }
+
+
+    if (
+        !cuda_download_clash_scores(
+            device_clash_scores,
+            clash_scores
+        )
+    ) {
+        cuda_free_clash_scores(
+            device_clash_scores
+        );
+
+        cuda_free_rigid_transforms(
+            device_transforms
+        );
+
+        return false;
+    }
+
+
+    cuda_free_clash_scores(
+        device_clash_scores
+    );
+
+
+    cuda_free_rigid_transforms(
+        device_transforms
+    );
+
+
+    if (
         transforms.size() !=
+        alignments.size() ||
+        clash_scores.size() !=
         alignments.size()
     ) {
         return false;
@@ -90,34 +206,6 @@ bool cuda_run_pose_pipeline(
             ++result
                 .valid_transform_count;
         }
-    }
-
-
-    // ========================================================
-    // 2. Grid clash
-    // ========================================================
-
-    std::vector<GpuClashScore>
-        clash_scores;
-
-
-    if (
-        !cuda_score_grid_clash(
-            ligand_atoms,
-            protein_grid,
-            transforms,
-            clash_scores
-        )
-    ) {
-        return false;
-    }
-
-
-    if (
-        clash_scores.size() !=
-        transforms.size()
-    ) {
-        return false;
     }
 
 

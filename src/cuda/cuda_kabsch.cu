@@ -371,14 +371,16 @@ __global__ void finalize_kabsch_kernel(
 } // namespace
 
 
-bool cuda_compute_kabsch_transforms(
+bool cuda_compute_kabsch_transforms_device(
     const GpuPointArrayDevice& ligand_points,
     const GpuPointArrayDevice& protein_points,
     const std::vector<GpuAlignmentCandidate>& alignments,
-    std::vector<GpuRigidTransform>& transforms
+    GpuRigidTransformArrayDevice& transforms
 )
 {
-    transforms.clear();
+    cuda_free_rigid_transforms(
+        transforms
+    );
 
 
     if (alignments.empty())
@@ -691,7 +693,6 @@ bool cuda_compute_kabsch_transforms(
 
     constexpr int matrix_size = 3;
 
-
     int work_size = 0;
 
 
@@ -783,29 +784,137 @@ bool cuda_compute_kabsch_transforms(
     }
 
 
-    transforms.resize(
-        alignments.size()
-    );
+    /*
+     * Transfer ownership of the transform buffer
+     * to the caller.
+     *
+     * No device-to-host copy occurs here.
+     */
+    transforms.transforms =
+        device_transforms;
+
+    transforms.count =
+        alignment_count;
 
 
-    if (
-        cudaMemcpy(
-            transforms.data(),
-            device_transforms,
-            transform_bytes,
-            cudaMemcpyDeviceToHost
-        ) != cudaSuccess
-    ) {
-        transforms.clear();
-
-        cleanup();
-
-        return false;
-    }
+    /*
+     * Prevent cleanup() from freeing the returned
+     * device buffer.
+     */
+    device_transforms =
+        nullptr;
 
 
     cleanup();
 
 
     return true;
+}
+
+
+bool cuda_download_rigid_transforms(
+    const GpuRigidTransformArrayDevice& device_transforms,
+    std::vector<GpuRigidTransform>& host_transforms
+)
+{
+    host_transforms.clear();
+
+
+    if (device_transforms.count == 0)
+        return true;
+
+
+    if (device_transforms.transforms == nullptr)
+        return false;
+
+
+    host_transforms.resize(
+        device_transforms.count
+    );
+
+
+    const std::size_t bytes =
+        static_cast<std::size_t>(
+            device_transforms.count
+        ) *
+        sizeof(GpuRigidTransform);
+
+
+    if (
+        cudaMemcpy(
+            host_transforms.data(),
+            device_transforms.transforms,
+            bytes,
+            cudaMemcpyDeviceToHost
+        ) != cudaSuccess
+    ) {
+        host_transforms.clear();
+
+        return false;
+    }
+
+
+    return true;
+}
+
+
+void cuda_free_rigid_transforms(
+    GpuRigidTransformArrayDevice& device_transforms
+)
+{
+    if (device_transforms.transforms != nullptr) {
+
+        cudaFree(
+            device_transforms.transforms
+        );
+    }
+
+
+    device_transforms.transforms =
+        nullptr;
+
+    device_transforms.count =
+        0;
+}
+
+
+bool cuda_compute_kabsch_transforms(
+    const GpuPointArrayDevice& ligand_points,
+    const GpuPointArrayDevice& protein_points,
+    const std::vector<GpuAlignmentCandidate>& alignments,
+    std::vector<GpuRigidTransform>& transforms
+)
+{
+    transforms.clear();
+
+
+    GpuRigidTransformArrayDevice
+        device_transforms;
+
+
+    if (
+        !cuda_compute_kabsch_transforms_device(
+            ligand_points,
+            protein_points,
+            alignments,
+            device_transforms
+        )
+    ) {
+        return false;
+    }
+
+
+    const bool download_ok =
+        cuda_download_rigid_transforms(
+            device_transforms,
+            transforms
+        );
+
+
+    cuda_free_rigid_transforms(
+        device_transforms
+    );
+
+
+    return download_ok;
 }

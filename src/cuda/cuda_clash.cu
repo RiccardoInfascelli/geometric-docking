@@ -295,18 +295,24 @@ __global__ void grid_clash_kernel(
 } // namespace
 
 
-bool cuda_score_grid_clash(
+bool cuda_score_grid_clash_device(
     const GpuPointArrayDevice& ligand_atoms,
     const GpuProteinGridDevice& protein_grid,
-    const std::vector<GpuRigidTransform>& transforms,
-    std::vector<GpuClashScore>& scores
+    const GpuRigidTransformArrayDevice& transforms,
+    GpuClashScoreArrayDevice& scores
 )
 {
-    scores.clear();
+    cuda_free_clash_scores(
+        scores
+    );
 
 
-    if (transforms.empty())
+    if (transforms.count == 0)
         return true;
+
+
+    if (transforms.transforms == nullptr)
+        return false;
 
 
     if (
@@ -325,47 +331,15 @@ bool cuda_score_grid_clash(
     }
 
 
-    if (
-        transforms.size() >
-        static_cast<std::size_t>(
-            std::numeric_limits<
-                std::uint32_t
-            >::max()
-        )
-    ) {
-        return false;
-    }
-
-
-    GpuRigidTransform*
-        device_transforms =
-            nullptr;
-
-    GpuClashScore*
-        device_scores =
-            nullptr;
-
-
-    const std::size_t transform_bytes =
-        transforms.size() *
-        sizeof(GpuRigidTransform);
+    GpuClashScore* device_scores =
+        nullptr;
 
 
     const std::size_t score_bytes =
-        transforms.size() *
+        static_cast<std::size_t>(
+            transforms.count
+        ) *
         sizeof(GpuClashScore);
-
-
-    if (
-        cudaMalloc(
-            reinterpret_cast<void**>(
-                &device_transforms
-            ),
-            transform_bytes
-        ) != cudaSuccess
-    ) {
-        return false;
-    }
 
 
     if (
@@ -376,38 +350,8 @@ bool cuda_score_grid_clash(
             score_bytes
         ) != cudaSuccess
     ) {
-        cudaFree(
-            device_transforms
-        );
-
         return false;
     }
-
-
-    if (
-        cudaMemcpy(
-            device_transforms,
-            transforms.data(),
-            transform_bytes,
-            cudaMemcpyHostToDevice
-        ) != cudaSuccess
-    ) {
-        cudaFree(
-            device_scores
-        );
-
-        cudaFree(
-            device_transforms
-        );
-
-        return false;
-    }
-
-
-    const std::uint32_t transform_count =
-        static_cast<std::uint32_t>(
-            transforms.size()
-        );
 
 
     constexpr std::uint32_t block_size =
@@ -416,7 +360,7 @@ bool cuda_score_grid_clash(
 
     const std::uint32_t block_count =
         (
-            transform_count +
+            transforms.count +
             block_size - 1
         ) /
         block_size;
@@ -427,8 +371,8 @@ bool cuda_score_grid_clash(
             ligand_atoms.points,
             ligand_atoms.count,
             protein_grid,
-            device_transforms,
-            transform_count,
+            transforms.transforms,
+            transforms.count,
             device_scores
         );
 
@@ -443,34 +387,153 @@ bool cuda_score_grid_clash(
             device_scores
         );
 
-        cudaFree(
-            device_transforms
-        );
-
         return false;
     }
 
 
-    scores.resize(
-        transforms.size()
+    /*
+     * Keep clash scores resident on the GPU.
+     * Ownership is transferred to the caller.
+     */
+    scores.scores =
+        device_scores;
+
+    scores.count =
+        transforms.count;
+
+
+    return true;
+}
+
+
+bool cuda_download_clash_scores(
+    const GpuClashScoreArrayDevice& device_scores,
+    std::vector<GpuClashScore>& host_scores
+)
+{
+    host_scores.clear();
+
+
+    if (device_scores.count == 0)
+        return true;
+
+
+    if (device_scores.scores == nullptr)
+        return false;
+
+
+    host_scores.resize(
+        device_scores.count
     );
+
+
+    const std::size_t bytes =
+        static_cast<std::size_t>(
+            device_scores.count
+        ) *
+        sizeof(GpuClashScore);
 
 
     if (
         cudaMemcpy(
-            scores.data(),
-            device_scores,
-            score_bytes,
+            host_scores.data(),
+            device_scores.scores,
+            bytes,
             cudaMemcpyDeviceToHost
         ) != cudaSuccess
     ) {
-        scores.clear();
+        host_scores.clear();
+
+        return false;
+    }
+
+
+    return true;
+}
+
+
+void cuda_free_clash_scores(
+    GpuClashScoreArrayDevice& device_scores
+)
+{
+    if (device_scores.scores != nullptr) {
 
         cudaFree(
-            device_scores
+            device_scores.scores
+        );
+    }
+
+
+    device_scores.scores =
+        nullptr;
+
+    device_scores.count =
+        0;
+}
+
+
+bool cuda_score_grid_clash(
+    const GpuPointArrayDevice& ligand_atoms,
+    const GpuProteinGridDevice& protein_grid,
+    const std::vector<GpuRigidTransform>& transforms,
+    std::vector<GpuClashScore>& scores
+)
+{
+    scores.clear();
+
+
+    if (transforms.empty())
+        return true;
+
+
+    if (
+        transforms.size() >
+        static_cast<std::size_t>(
+            std::numeric_limits<
+                std::uint32_t
+            >::max()
+        )
+    ) {
+        return false;
+    }
+
+
+    GpuRigidTransformArrayDevice
+        device_transforms;
+
+
+    const std::size_t transform_bytes =
+        transforms.size() *
+        sizeof(GpuRigidTransform);
+
+
+    if (
+        cudaMalloc(
+            reinterpret_cast<void**>(
+                &device_transforms.transforms
+            ),
+            transform_bytes
+        ) != cudaSuccess
+    ) {
+        return false;
+    }
+
+
+    device_transforms.count =
+        static_cast<std::uint32_t>(
+            transforms.size()
         );
 
-        cudaFree(
+
+    if (
+        cudaMemcpy(
+            device_transforms.transforms,
+            transforms.data(),
+            transform_bytes,
+            cudaMemcpyHostToDevice
+        ) != cudaSuccess
+    ) {
+        cuda_free_rigid_transforms(
             device_transforms
         );
 
@@ -478,14 +541,42 @@ bool cuda_score_grid_clash(
     }
 
 
-    cudaFree(
+    GpuClashScoreArrayDevice
+        device_scores;
+
+
+    if (
+        !cuda_score_grid_clash_device(
+            ligand_atoms,
+            protein_grid,
+            device_transforms,
+            device_scores
+        )
+    ) {
+        cuda_free_rigid_transforms(
+            device_transforms
+        );
+
+        return false;
+    }
+
+
+    const bool download_ok =
+        cuda_download_clash_scores(
+            device_scores,
+            scores
+        );
+
+
+    cuda_free_clash_scores(
         device_scores
     );
 
-    cudaFree(
+
+    cuda_free_rigid_transforms(
         device_transforms
     );
 
 
-    return true;
+    return download_ok;
 }
