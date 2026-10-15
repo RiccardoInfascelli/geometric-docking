@@ -122,6 +122,32 @@ bool cuda_exclusive_prefix_sum(
 );
 
 
+struct GpuTripletCandidateArrayDevice
+{
+    GpuTripletCandidate* candidates{nullptr};
+    std::uint32_t count{};
+};
+
+
+bool cuda_expand_triplet_neighbor_records_device(
+    const GpuFlatTripletIndexDevice& device_index,
+    const std::vector<GpuTripletKey>& queries,
+    const std::vector<std::uint32_t>& candidate_offsets,
+    GpuTripletCandidateArrayDevice& candidates
+);
+
+
+bool cuda_download_triplet_candidates(
+    const GpuTripletCandidateArrayDevice& device_candidates,
+    std::vector<GpuTripletCandidate>& host_candidates
+);
+
+
+void cuda_free_triplet_candidates(
+    GpuTripletCandidateArrayDevice& candidates
+);
+
+
 bool cuda_expand_triplet_neighbor_records(
     const GpuFlatTripletIndexDevice& device_index,
     const std::vector<GpuTripletKey>& queries,

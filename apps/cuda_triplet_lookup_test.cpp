@@ -392,6 +392,94 @@ int main()
     }
 
 
+    // ========================================================
+    // Device-native candidate expansion equivalence
+    // ========================================================
+
+    {
+        GpuTripletCandidateArrayDevice
+            device_candidates{};
+
+        if (
+            !cuda_expand_triplet_neighbor_records_device(
+                device_index,
+                count_queries,
+                candidate_offsets,
+                device_candidates
+            )
+        ) {
+            cuda_free_triplet_candidates(device_candidates);
+            cuda_free_triplet_index(device_index);
+
+            std::cerr
+                << "CUDA device candidate expansion failed\n";
+
+            return 1;
+        }
+
+        std::vector<GpuTripletCandidate>
+            downloaded_candidates;
+
+        bool matches =
+            cuda_download_triplet_candidates(
+                device_candidates,
+                downloaded_candidates
+            )
+            &&
+            device_candidates.count == candidates.size()
+            &&
+            downloaded_candidates.size() == candidates.size();
+
+        if (matches) {
+            for (
+                std::size_t i = 0;
+                i < candidates.size();
+                ++i
+            ) {
+                const auto& a = candidates[i];
+                const auto& b = downloaded_candidates[i];
+
+                if (
+                    a.ligand_triplet_index !=
+                        b.ligand_triplet_index
+                    ||
+                    a.protein_indices[0] != b.protein_indices[0]
+                    ||
+                    a.protein_indices[1] != b.protein_indices[1]
+                    ||
+                    a.protein_indices[2] != b.protein_indices[2]
+                ) {
+                    matches = false;
+                    break;
+                }
+            }
+        }
+
+        cuda_free_triplet_candidates(
+            device_candidates
+        );
+
+        if (
+            device_candidates.candidates != nullptr ||
+            device_candidates.count != 0
+        ) {
+            matches = false;
+        }
+
+        if (!matches) {
+            std::cerr
+                << "CUDA device candidate equivalence failed\n";
+
+            cuda_free_triplet_index(device_index);
+
+            return 1;
+        }
+
+        std::cout
+            << "CUDA device triplet candidate equivalence passed\n";
+    }
+
+
     if (candidates.size() != 3) {
 
         std::cerr

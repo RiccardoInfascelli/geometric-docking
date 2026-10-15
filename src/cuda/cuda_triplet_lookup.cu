@@ -1214,14 +1214,19 @@ bool cuda_exclusive_prefix_sum(
     return true;
 }
 
-bool cuda_expand_triplet_neighbor_records(
+bool cuda_expand_triplet_neighbor_records_device(
     const GpuFlatTripletIndexDevice& device_index,
     const std::vector<GpuTripletKey>& queries,
     const std::vector<std::uint32_t>& candidate_offsets,
-    std::vector<GpuTripletCandidate>& candidates
+    GpuTripletCandidateArrayDevice& candidates
 )
 {
-    candidates.clear();
+    if (
+        candidates.candidates != nullptr ||
+        candidates.count != 0
+    ) {
+        return false;
+    }
 
 
     if (
@@ -1430,37 +1435,92 @@ bool cuda_expand_triplet_neighbor_records(
     }
 
 
-    candidates.resize(
-        total_candidates
-    );
+    candidates.candidates = device_candidates;
+    candidates.count = total_candidates;
 
-
-    if (
-        cudaMemcpy(
-            candidates.data(),
-            device_candidates,
-            candidate_bytes,
-            cudaMemcpyDeviceToHost
-        ) != cudaSuccess
-    ) {
-        candidates.clear();
-
-        cudaFree(device_candidates);
-        cudaFree(device_candidate_offsets);
-        cudaFree(device_queries);
-
-        return false;
-    }
-
-
-    cudaFree(device_candidates);
     cudaFree(device_candidate_offsets);
     cudaFree(device_queries);
-
 
     return true;
 }
 
+
+bool cuda_download_triplet_candidates(
+    const GpuTripletCandidateArrayDevice& device_candidates,
+    std::vector<GpuTripletCandidate>& host_candidates
+)
+{
+    host_candidates.clear();
+
+    if (device_candidates.count == 0)
+        return device_candidates.candidates == nullptr;
+
+    if (device_candidates.candidates == nullptr)
+        return false;
+
+    host_candidates.resize(device_candidates.count);
+
+    const std::size_t bytes =
+        static_cast<std::size_t>(device_candidates.count) *
+        sizeof(GpuTripletCandidate);
+
+    if (
+        cudaMemcpy(
+            host_candidates.data(),
+            device_candidates.candidates,
+            bytes,
+            cudaMemcpyDeviceToHost
+        ) != cudaSuccess
+    ) {
+        host_candidates.clear();
+        return false;
+    }
+
+    return true;
+}
+
+
+void cuda_free_triplet_candidates(
+    GpuTripletCandidateArrayDevice& candidates
+)
+{
+    cudaFree(candidates.candidates);
+    candidates = {};
+}
+
+
+bool cuda_expand_triplet_neighbor_records(
+    const GpuFlatTripletIndexDevice& device_index,
+    const std::vector<GpuTripletKey>& queries,
+    const std::vector<std::uint32_t>& candidate_offsets,
+    std::vector<GpuTripletCandidate>& candidates
+)
+{
+    candidates.clear();
+
+    GpuTripletCandidateArrayDevice device_candidates{};
+
+    if (
+        !cuda_expand_triplet_neighbor_records_device(
+            device_index,
+            queries,
+            candidate_offsets,
+            device_candidates
+        )
+    ) {
+        return false;
+    }
+
+    const bool success =
+        cuda_download_triplet_candidates(
+            device_candidates,
+            candidates
+        );
+
+    cuda_free_triplet_candidates(device_candidates);
+
+    return success;
+}
 
 bool cuda_count_alignment_candidates(
     const std::vector<GpuTripletCandidate>& candidates,

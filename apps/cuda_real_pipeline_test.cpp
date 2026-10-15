@@ -335,6 +335,9 @@ int main(
     GpuFastMatchingAreaArrayDevice
         device_fast_areas{};
 
+    GpuTripletCandidateArrayDevice
+        device_triplet_candidates{};
+
     GpuAlignmentCandidateArrayDevice
         device_alignments{};
 
@@ -342,6 +345,10 @@ int main(
     const auto cleanup =
         [&]()
         {
+            cuda_free_triplet_candidates(
+                device_triplet_candidates
+            );
+
             cuda_free_alignment_candidates(
                 device_alignments
             );
@@ -605,20 +612,49 @@ int main(
         }
 
 
+        if (
+            !cuda_expand_triplet_neighbor_records_device(
+                device_triplet_index,
+                queries,
+                candidate_offsets,
+                device_triplet_candidates
+            )
+        ) {
+            throw std::runtime_error(
+                "CUDA device triplet candidate expansion failed"
+            );
+        }
+
+
+        // Temporary host copy needed by alignment counting
+        // and expansion, and by CPU/GPU validation.
         std::vector<GpuTripletCandidate>
             triplet_candidates;
 
 
         if (
-            !cuda_expand_triplet_neighbor_records(
-                device_triplet_index,
-                queries,
-                candidate_offsets,
+            !cuda_download_triplet_candidates(
+                device_triplet_candidates,
                 triplet_candidates
             )
         ) {
             throw std::runtime_error(
-                "CUDA triplet candidate expansion failed"
+                "CUDA triplet candidate download failed"
+            );
+        }
+
+
+        if (
+            candidate_offsets.empty()
+            ||
+            device_triplet_candidates.count !=
+                candidate_offsets.back()
+            ||
+            triplet_candidates.size() !=
+                device_triplet_candidates.count
+        ) {
+            throw std::runtime_error(
+                "CUDA triplet candidate count mismatch"
             );
         }
 
