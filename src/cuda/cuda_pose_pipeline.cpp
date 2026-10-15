@@ -1,5 +1,7 @@
 #include "cuda_pose_pipeline.hpp"
 
+#include <cuda_runtime.h>
+
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -13,7 +15,7 @@ bool cuda_run_pose_pipeline(
     const GpuPointArrayDevice& ligand_atoms,
     const GpuFastMatchingAreaArrayDevice& ligand_fast_areas,
     const GpuProteinGridDevice& protein_grid,
-    const std::vector<GpuAlignmentCandidate>& alignments,
+    const GpuAlignmentCandidateArrayDevice& alignments,
     double clash_threshold,
     GpuPosePipelineResult& result
 )
@@ -33,33 +35,26 @@ bool cuda_run_pose_pipeline(
     }
 
 
-    if (
-        alignments.size() >
-        std::numeric_limits<
-            std::uint32_t
-        >::max()
-    ) {
-        return false;
-    }
-
-
     result.input_alignment_count =
-        static_cast<std::uint32_t>(
-            alignments.size()
-        );
+        alignments.count;
 
 
-    if (alignments.empty()) {
+    if (alignments.count == 0) {
         return true;
     }
 
 
-        // ========================================================
-    // 1. Kabsch - device resident
+    if (alignments.alignments == nullptr) {
+        return false;
+    }
+
+
+    // ========================================================
+    // 1. Kabsch - consume alignment candidates directly on GPU
     // ========================================================
 
     GpuRigidTransformArrayDevice
-        device_transforms;
+        device_transforms{};
 
 
     if (
@@ -76,7 +71,7 @@ bool cuda_run_pose_pipeline(
 
     if (
         device_transforms.count !=
-        alignments.size()
+        alignments.count
     ) {
         cuda_free_rigid_transforms(
             device_transforms
@@ -91,7 +86,7 @@ bool cuda_run_pose_pipeline(
     // ========================================================
 
     GpuClashScoreArrayDevice
-        device_clash_scores;
+        device_clash_scores{};
 
 
     if (
@@ -126,7 +121,7 @@ bool cuda_run_pose_pipeline(
     }
 
 
-        // ========================================================
+    // ========================================================
     // 3. GPU clash compaction
     // ========================================================
 
@@ -320,6 +315,7 @@ bool cuda_run_pose_pipeline(
         return false;
     }
 
+
     // ========================================================
     // 5. Assemble surviving poses
     // ========================================================
@@ -347,11 +343,14 @@ bool cuda_run_pose_pipeline(
         pose.alignment_index =
             survivor_alignment_indices[i];
 
+
         pose.transform =
             survivor_transforms[i];
 
+
         pose.clash =
             survivor_clash_scores[i];
+
 
         pose.fast_score =
             fast_scores[i];
@@ -364,4 +363,123 @@ bool cuda_run_pose_pipeline(
 
 
     return true;
+}
+
+
+// ============================================================
+// Legacy host-vector API
+//
+// Used by the existing synthetic pipeline test.
+// The production/device path above does not perform this
+// host-to-device alignment copy.
+// ============================================================
+
+bool cuda_run_pose_pipeline(
+    const GpuPointArrayDevice& ligand_matching_points,
+    const GpuPointArrayDevice& protein_target_points,
+    const GpuPointArrayDevice& ligand_atoms,
+    const GpuFastMatchingAreaArrayDevice& ligand_fast_areas,
+    const GpuProteinGridDevice& protein_grid,
+    const std::vector<GpuAlignmentCandidate>& alignments,
+    double clash_threshold,
+    GpuPosePipelineResult& result
+)
+{
+    if (
+        alignments.size() >
+        std::numeric_limits<
+            std::uint32_t
+        >::max()
+    ) {
+        return false;
+    }
+
+
+    /*
+     * Preserve the index validation performed by the
+     * previous host-vector Kabsch path.
+     */
+    for (const auto& alignment :
+         alignments) {
+
+        for (int i = 0; i < 3; ++i) {
+
+            if (
+                alignment.ligand_indices[i] >=
+                    ligand_matching_points.count ||
+
+                alignment.protein_indices[i] >=
+                    protein_target_points.count
+            ) {
+                return false;
+            }
+        }
+    }
+
+
+    GpuAlignmentCandidateArrayDevice
+        device_alignments{};
+
+
+    if (!alignments.empty()) {
+
+        const std::size_t bytes =
+            alignments.size() *
+            sizeof(GpuAlignmentCandidate);
+
+
+        if (
+            cudaMalloc(
+                reinterpret_cast<void**>(
+                    &device_alignments.alignments
+                ),
+                bytes
+            ) != cudaSuccess
+        ) {
+            return false;
+        }
+
+
+        device_alignments.count =
+            static_cast<std::uint32_t>(
+                alignments.size()
+            );
+
+
+        if (
+            cudaMemcpy(
+                device_alignments.alignments,
+                alignments.data(),
+                bytes,
+                cudaMemcpyHostToDevice
+            ) != cudaSuccess
+        ) {
+            cuda_free_alignment_candidates(
+                device_alignments
+            );
+
+            return false;
+        }
+    }
+
+
+    const bool ok =
+        cuda_run_pose_pipeline(
+            ligand_matching_points,
+            protein_target_points,
+            ligand_atoms,
+            ligand_fast_areas,
+            protein_grid,
+            device_alignments,
+            clash_threshold,
+            result
+        );
+
+
+    cuda_free_alignment_candidates(
+        device_alignments
+    );
+
+
+    return ok;
 }

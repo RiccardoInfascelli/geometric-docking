@@ -28,6 +28,17 @@ struct GpuPosePipelineResult
     std::vector<GpuPipelinePose> poses;
 };
 
+bool cuda_run_pose_pipeline(
+    const GpuPointArrayDevice& ligand_matching_points,
+    const GpuPointArrayDevice& protein_target_points,
+    const GpuPointArrayDevice& ligand_atoms,
+    const GpuFastMatchingAreaArrayDevice& ligand_fast_areas,
+    const GpuProteinGridDevice& protein_grid,
+    const GpuAlignmentCandidateArrayDevice& alignments,
+    double clash_threshold,
+    GpuPosePipelineResult& result
+);
+
 
 bool cuda_run_pose_pipeline(
     const GpuPointArrayDevice& ligand_matching_points,

@@ -1661,14 +1661,16 @@ bool cuda_count_alignment_candidates(
 }
 
 
-bool cuda_expand_alignment_candidates(
+bool cuda_expand_alignment_candidates_device(
     const std::vector<GpuTripletCandidate>& candidates,
     const std::vector<GpuLigandTripletOrders>& ligand_orders,
     const std::vector<std::uint32_t>& alignment_offsets,
-    std::vector<GpuAlignmentCandidate>& alignments
+    GpuAlignmentCandidateArrayDevice& alignments
 )
 {
-    alignments.clear();
+    cuda_free_alignment_candidates(
+        alignments
+    );
 
 
     if (
@@ -1685,6 +1687,16 @@ bool cuda_expand_alignment_candidates(
             alignment_offsets.size() == 1 &&
             alignment_offsets[0] == 0
         );
+    }
+
+
+    if (
+        candidates.size() >
+        std::numeric_limits<
+            std::uint32_t
+        >::max()
+    ) {
+        return false;
     }
 
 
@@ -1733,30 +1745,58 @@ bool cuda_expand_alignment_candidates(
         return true;
 
 
-    GpuTripletCandidate* device_candidates =
-        nullptr;
+    GpuTripletCandidate*
+        device_candidates =
+            nullptr;
 
-    GpuLigandTripletOrders* device_orders =
-        nullptr;
+    GpuLigandTripletOrders*
+        device_orders =
+            nullptr;
 
-    std::uint32_t* device_offsets =
-        nullptr;
+    std::uint32_t*
+        device_offsets =
+            nullptr;
 
-    GpuAlignmentCandidate* device_alignments =
-        nullptr;
+    GpuAlignmentCandidate*
+        device_alignments =
+            nullptr;
+
+
+    auto cleanup =
+        [&]()
+        {
+            cudaFree(
+                device_alignments
+            );
+
+            cudaFree(
+                device_offsets
+            );
+
+            cudaFree(
+                device_orders
+            );
+
+            cudaFree(
+                device_candidates
+            );
+        };
 
 
     const std::size_t candidate_bytes =
         candidates.size() *
         sizeof(GpuTripletCandidate);
 
+
     const std::size_t order_bytes =
         ligand_orders.size() *
         sizeof(GpuLigandTripletOrders);
 
+
     const std::size_t offset_bytes =
         alignment_offsets.size() *
         sizeof(std::uint32_t);
+
 
     const std::size_t alignment_bytes =
         static_cast<std::size_t>(
@@ -1771,40 +1811,22 @@ bool cuda_expand_alignment_candidates(
                 &device_candidates
             ),
             candidate_bytes
-        ) != cudaSuccess
-    ) {
-        return false;
-    }
+        ) != cudaSuccess ||
 
-
-    if (
         cudaMalloc(
             reinterpret_cast<void**>(
                 &device_orders
             ),
             order_bytes
-        ) != cudaSuccess
-    ) {
-        cudaFree(device_candidates);
-        return false;
-    }
+        ) != cudaSuccess ||
 
-
-    if (
         cudaMalloc(
             reinterpret_cast<void**>(
                 &device_offsets
             ),
             offset_bytes
-        ) != cudaSuccess
-    ) {
-        cudaFree(device_orders);
-        cudaFree(device_candidates);
-        return false;
-    }
+        ) != cudaSuccess ||
 
-
-    if (
         cudaMalloc(
             reinterpret_cast<void**>(
                 &device_alignments
@@ -1812,9 +1834,7 @@ bool cuda_expand_alignment_candidates(
             alignment_bytes
         ) != cudaSuccess
     ) {
-        cudaFree(device_offsets);
-        cudaFree(device_orders);
-        cudaFree(device_candidates);
+        cleanup();
 
         return false;
     }
@@ -1827,12 +1847,14 @@ bool cuda_expand_alignment_candidates(
             candidate_bytes,
             cudaMemcpyHostToDevice
         ) != cudaSuccess ||
+
         cudaMemcpy(
             device_orders,
             ligand_orders.data(),
             order_bytes,
             cudaMemcpyHostToDevice
         ) != cudaSuccess ||
+
         cudaMemcpy(
             device_offsets,
             alignment_offsets.data(),
@@ -1840,10 +1862,7 @@ bool cuda_expand_alignment_candidates(
             cudaMemcpyHostToDevice
         ) != cudaSuccess
     ) {
-        cudaFree(device_alignments);
-        cudaFree(device_offsets);
-        cudaFree(device_orders);
-        cudaFree(device_candidates);
+        cleanup();
 
         return false;
     }
@@ -1858,11 +1877,13 @@ bool cuda_expand_alignment_candidates(
     constexpr std::uint32_t block_size =
         256;
 
+
     const std::uint32_t block_count =
         (
             candidate_count +
             block_size - 1
-        ) / block_size;
+        ) /
+        block_size;
 
 
     alignment_candidate_expand_kernel
@@ -1876,47 +1897,142 @@ bool cuda_expand_alignment_candidates(
 
 
     if (
-        cudaGetLastError() != cudaSuccess ||
-        cudaDeviceSynchronize() != cudaSuccess
+        cudaGetLastError() !=
+            cudaSuccess ||
+        cudaDeviceSynchronize() !=
+            cudaSuccess
     ) {
-        cudaFree(device_alignments);
-        cudaFree(device_offsets);
-        cudaFree(device_orders);
-        cudaFree(device_candidates);
+        cleanup();
 
         return false;
     }
 
 
-    alignments.resize(
-        total_alignments
+    alignments.alignments =
+        device_alignments;
+
+    alignments.count =
+        total_alignments;
+
+
+    /*
+     * Ownership transferred to caller.
+     */
+    device_alignments =
+        nullptr;
+
+
+    cleanup();
+
+
+    return true;
+}
+
+
+bool cuda_download_alignment_candidates(
+    const GpuAlignmentCandidateArrayDevice& device_alignments,
+    std::vector<GpuAlignmentCandidate>& host_alignments
+)
+{
+    host_alignments.clear();
+
+
+    if (device_alignments.count == 0)
+        return true;
+
+
+    if (
+        device_alignments.alignments ==
+        nullptr
+    ) {
+        return false;
+    }
+
+
+    host_alignments.resize(
+        device_alignments.count
     );
+
+
+    const std::size_t bytes =
+        static_cast<std::size_t>(
+            device_alignments.count
+        ) *
+        sizeof(GpuAlignmentCandidate);
 
 
     if (
         cudaMemcpy(
-            alignments.data(),
-            device_alignments,
-            alignment_bytes,
+            host_alignments.data(),
+            device_alignments.alignments,
+            bytes,
             cudaMemcpyDeviceToHost
         ) != cudaSuccess
     ) {
-        alignments.clear();
-
-        cudaFree(device_alignments);
-        cudaFree(device_offsets);
-        cudaFree(device_orders);
-        cudaFree(device_candidates);
+        host_alignments.clear();
 
         return false;
     }
 
 
-    cudaFree(device_alignments);
-    cudaFree(device_offsets);
-    cudaFree(device_orders);
-    cudaFree(device_candidates);
-
-
     return true;
+}
+
+
+void cuda_free_alignment_candidates(
+    GpuAlignmentCandidateArrayDevice& alignments
+)
+{
+    cudaFree(
+        alignments.alignments
+    );
+
+
+    alignments.alignments =
+        nullptr;
+
+    alignments.count =
+        0;
+}
+
+
+bool cuda_expand_alignment_candidates(
+    const std::vector<GpuTripletCandidate>& candidates,
+    const std::vector<GpuLigandTripletOrders>& ligand_orders,
+    const std::vector<std::uint32_t>& alignment_offsets,
+    std::vector<GpuAlignmentCandidate>& alignments
+)
+{
+    alignments.clear();
+
+
+    GpuAlignmentCandidateArrayDevice
+        device_alignments{};
+
+
+    if (
+        !cuda_expand_alignment_candidates_device(
+            candidates,
+            ligand_orders,
+            alignment_offsets,
+            device_alignments
+        )
+    ) {
+        return false;
+    }
+
+
+    const bool download_ok =
+        cuda_download_alignment_candidates(
+            device_alignments,
+            alignments
+        );
+
+
+    cuda_free_alignment_candidates(
+        device_alignments
+    );
+
+
+    return download_ok;
 }

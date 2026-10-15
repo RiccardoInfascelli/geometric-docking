@@ -335,10 +335,17 @@ int main(
     GpuFastMatchingAreaArrayDevice
         device_fast_areas{};
 
+    GpuAlignmentCandidateArrayDevice
+        device_alignments{};
+
 
     const auto cleanup =
         [&]()
         {
+            cuda_free_alignment_candidates(
+                device_alignments
+            );
+
             cuda_free_fast_matching_areas(
                 device_fast_areas
             );
@@ -653,20 +660,42 @@ int main(
         }
 
 
+
+
+
+        if (
+            !cuda_expand_alignment_candidates_device(
+                triplet_candidates,
+                ligand_orders,
+                alignment_offsets,
+                device_alignments
+            )
+        ) {
+            throw std::runtime_error(
+                "CUDA device alignment expansion failed"
+            );
+        }
+
+
+        /*
+        * Host copy used only by the CPU/GPU validation code below.
+        *
+        * The CUDA pose pipeline itself consumes device_alignments
+        * directly and therefore does not upload these alignments
+        * back to the GPU.
+        */
         std::vector<GpuAlignmentCandidate>
             alignments;
 
 
         if (
-            !cuda_expand_alignment_candidates(
-                triplet_candidates,
-                ligand_orders,
-                alignment_offsets,
+            !cuda_download_alignment_candidates(
+                device_alignments,
                 alignments
             )
         ) {
             throw std::runtime_error(
-                "CUDA alignment expansion failed"
+                "CUDA alignment download failed"
             );
         }
 
@@ -1079,7 +1108,7 @@ int main(
                 device_ligand_atoms,
                 device_fast_areas,
                 device_grid,
-                alignments,
+                device_alignments,
                 config.operational_clash_threshold,
                 result
             )

@@ -374,7 +374,7 @@ __global__ void finalize_kabsch_kernel(
 bool cuda_compute_kabsch_transforms_device(
     const GpuPointArrayDevice& ligand_points,
     const GpuPointArrayDevice& protein_points,
-    const std::vector<GpuAlignmentCandidate>& alignments,
+    const GpuAlignmentCandidateArrayDevice& alignments,
     GpuRigidTransformArrayDevice& transforms
 )
 {
@@ -383,11 +383,12 @@ bool cuda_compute_kabsch_transforms_device(
     );
 
 
-    if (alignments.empty())
+    if (alignments.count == 0)
         return true;
 
 
     if (
+        alignments.alignments == nullptr ||
         ligand_points.points == nullptr ||
         protein_points.points == nullptr
     ) {
@@ -396,44 +397,24 @@ bool cuda_compute_kabsch_transforms_device(
 
 
     if (
-        alignments.size() >
-        static_cast<std::size_t>(INT_MAX)
+        alignments.count >
+        static_cast<std::uint32_t>(
+            INT_MAX
+        )
     ) {
         return false;
     }
 
 
-    for (const auto& alignment :
-         alignments) {
-
-        for (int i = 0; i < 3; ++i) {
-
-            if (
-                alignment.ligand_indices[i] >=
-                    ligand_points.count ||
-                alignment.protein_indices[i] >=
-                    protein_points.count
-            ) {
-                return false;
-            }
-        }
-    }
-
-
     const std::uint32_t alignment_count =
-        static_cast<std::uint32_t>(
-            alignments.size()
-        );
+        alignments.count;
 
 
     const int batch_size =
         static_cast<int>(
-            alignments.size()
+            alignment_count
         );
 
-
-    GpuAlignmentCandidate* device_alignments =
-        nullptr;
 
     double* device_covariance =
         nullptr;
@@ -509,21 +490,19 @@ bool cuda_compute_kabsch_transforms_device(
                 device_covariance
             );
 
-            cudaFree(
-                device_alignments
-            );
 
-
-            if (solver_params != nullptr) {
-
+            if (
+                solver_params != nullptr
+            ) {
                 cusolverDnDestroyGesvdjInfo(
                     solver_params
                 );
             }
 
 
-            if (solver != nullptr) {
-
+            if (
+                solver != nullptr
+            ) {
                 cusolverDnDestroy(
                     solver
                 );
@@ -531,41 +510,44 @@ bool cuda_compute_kabsch_transforms_device(
         };
 
 
-    const std::size_t alignment_bytes =
-        alignments.size() *
-        sizeof(GpuAlignmentCandidate);
-
     const std::size_t matrix_bytes =
-        alignments.size() *
+        static_cast<std::size_t>(
+            alignment_count
+        ) *
         9 *
         sizeof(double);
 
+
     const std::size_t singular_bytes =
-        alignments.size() *
+        static_cast<std::size_t>(
+            alignment_count
+        ) *
         3 *
         sizeof(double);
 
+
     const std::size_t centroid_bytes =
-        alignments.size() *
+        static_cast<std::size_t>(
+            alignment_count
+        ) *
         sizeof(GpuPoint3);
 
+
     const std::size_t info_bytes =
-        alignments.size() *
+        static_cast<std::size_t>(
+            alignment_count
+        ) *
         sizeof(int);
 
+
     const std::size_t transform_bytes =
-        alignments.size() *
+        static_cast<std::size_t>(
+            alignment_count
+        ) *
         sizeof(GpuRigidTransform);
 
 
     if (
-        cudaMalloc(
-            reinterpret_cast<void**>(
-                &device_alignments
-            ),
-            alignment_bytes
-        ) != cudaSuccess ||
-
         cudaMalloc(
             reinterpret_cast<void**>(
                 &device_covariance
@@ -623,19 +605,7 @@ bool cuda_compute_kabsch_transforms_device(
         ) != cudaSuccess
     ) {
         cleanup();
-        return false;
-    }
 
-
-    if (
-        cudaMemcpy(
-            device_alignments,
-            alignments.data(),
-            alignment_bytes,
-            cudaMemcpyHostToDevice
-        ) != cudaSuccess
-    ) {
-        cleanup();
         return false;
     }
 
@@ -648,14 +618,15 @@ bool cuda_compute_kabsch_transforms_device(
         (
             alignment_count +
             block_size - 1
-        ) / block_size;
+        ) /
+        block_size;
 
 
     prepare_kabsch_kernel
         <<<block_count, block_size>>>(
             ligand_points.points,
             protein_points.points,
-            device_alignments,
+            alignments.alignments,
             alignment_count,
             device_covariance,
             device_ligand_centroids,
@@ -664,9 +635,11 @@ bool cuda_compute_kabsch_transforms_device(
 
 
     if (
-        cudaGetLastError() != cudaSuccess
+        cudaGetLastError() !=
+        cudaSuccess
     ) {
         cleanup();
+
         return false;
     }
 
@@ -677,6 +650,7 @@ bool cuda_compute_kabsch_transforms_device(
         ) != CUSOLVER_STATUS_SUCCESS
     ) {
         cleanup();
+
         return false;
     }
 
@@ -687,13 +661,17 @@ bool cuda_compute_kabsch_transforms_device(
         ) != CUSOLVER_STATUS_SUCCESS
     ) {
         cleanup();
+
         return false;
     }
 
 
-    constexpr int matrix_size = 3;
+    constexpr int matrix_size =
+        3;
 
-    int work_size = 0;
+
+    int work_size =
+        0;
 
 
     if (
@@ -715,6 +693,7 @@ bool cuda_compute_kabsch_transforms_device(
         ) != CUSOLVER_STATUS_SUCCESS
     ) {
         cleanup();
+
         return false;
     }
 
@@ -733,6 +712,7 @@ bool cuda_compute_kabsch_transforms_device(
             ) != cudaSuccess
         ) {
             cleanup();
+
             return false;
         }
     }
@@ -759,6 +739,7 @@ bool cuda_compute_kabsch_transforms_device(
         ) != CUSOLVER_STATUS_SUCCESS
     ) {
         cleanup();
+
         return false;
     }
 
@@ -776,10 +757,13 @@ bool cuda_compute_kabsch_transforms_device(
 
 
     if (
-        cudaGetLastError() != cudaSuccess ||
-        cudaDeviceSynchronize() != cudaSuccess
+        cudaGetLastError() !=
+            cudaSuccess ||
+        cudaDeviceSynchronize() !=
+            cudaSuccess
     ) {
         cleanup();
+
         return false;
     }
 
@@ -788,7 +772,7 @@ bool cuda_compute_kabsch_transforms_device(
      * Transfer ownership of the transform buffer
      * to the caller.
      *
-     * No device-to-host copy occurs here.
+     * Alignment data remains owned by the caller.
      */
     transforms.transforms =
         device_transforms;
@@ -799,7 +783,7 @@ bool cuda_compute_kabsch_transforms_device(
 
     /*
      * Prevent cleanup() from freeing the returned
-     * device buffer.
+     * transform buffer.
      */
     device_transforms =
         nullptr;
@@ -809,6 +793,114 @@ bool cuda_compute_kabsch_transforms_device(
 
 
     return true;
+}
+
+bool cuda_compute_kabsch_transforms_device(
+    const GpuPointArrayDevice& ligand_points,
+    const GpuPointArrayDevice& protein_points,
+    const std::vector<GpuAlignmentCandidate>& alignments,
+    GpuRigidTransformArrayDevice& transforms
+)
+{
+    if (
+        alignments.size() >
+        static_cast<std::size_t>(
+            INT_MAX
+        )
+    ) {
+        return false;
+    }
+
+
+    /*
+     * Preserve the validation semantics of the
+     * previous host-vector implementation.
+     */
+    for (const auto& alignment :
+         alignments) {
+
+        for (int i = 0; i < 3; ++i) {
+
+            if (
+                alignment.ligand_indices[i] >=
+                    ligand_points.count ||
+                alignment.protein_indices[i] >=
+                    protein_points.count
+            ) {
+                return false;
+            }
+        }
+    }
+
+
+    if (alignments.empty()) {
+
+        cuda_free_rigid_transforms(
+            transforms
+        );
+
+        return true;
+    }
+
+
+    GpuAlignmentCandidateArrayDevice
+        device_alignments{};
+
+
+    const std::size_t alignment_bytes =
+        alignments.size() *
+        sizeof(GpuAlignmentCandidate);
+
+
+    if (
+        cudaMalloc(
+            reinterpret_cast<void**>(
+                &device_alignments.alignments
+            ),
+            alignment_bytes
+        ) != cudaSuccess
+    ) {
+        return false;
+    }
+
+
+    device_alignments.count =
+        static_cast<std::uint32_t>(
+            alignments.size()
+        );
+
+
+    if (
+        cudaMemcpy(
+            device_alignments.alignments,
+            alignments.data(),
+            alignment_bytes,
+            cudaMemcpyHostToDevice
+        ) != cudaSuccess
+    ) {
+        cuda_free_alignment_candidates(
+            device_alignments
+        );
+
+        return false;
+    }
+
+
+    const bool ok =
+        cuda_compute_kabsch_transforms_device(
+            ligand_points,
+            protein_points,
+            device_alignments,
+            transforms
+        );
+
+
+    cuda_free_alignment_candidates(
+        device_alignments
+    );
+
+
+    return ok;
 }
 
 

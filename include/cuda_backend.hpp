@@ -49,7 +49,30 @@ struct GpuFastScoreArrayDevice
     std::uint32_t count{};
 };
 
+struct GpuAlignmentCandidateArrayDevice
+{
+    GpuAlignmentCandidate* alignments{nullptr};
+    std::uint32_t count{};
+};
 
+
+bool cuda_expand_alignment_candidates_device(
+    const std::vector<GpuTripletCandidate>& candidates,
+    const std::vector<GpuLigandTripletOrders>& ligand_orders,
+    const std::vector<std::uint32_t>& alignment_offsets,
+    GpuAlignmentCandidateArrayDevice& alignments
+);
+
+
+bool cuda_download_alignment_candidates(
+    const GpuAlignmentCandidateArrayDevice& device_alignments,
+    std::vector<GpuAlignmentCandidate>& host_alignments
+);
+
+
+void cuda_free_alignment_candidates(
+    GpuAlignmentCandidateArrayDevice& alignments
+);
 // ============================================================
 // General
 // ============================================================
@@ -158,6 +181,13 @@ bool cuda_compute_kabsch_transforms(
     const GpuPointArrayDevice& protein_points,
     const std::vector<GpuAlignmentCandidate>& alignments,
     std::vector<GpuRigidTransform>& transforms
+);
+
+bool cuda_compute_kabsch_transforms_device(
+    const GpuPointArrayDevice& ligand_points,
+    const GpuPointArrayDevice& protein_points,
+    const GpuAlignmentCandidateArrayDevice& alignments,
+    GpuRigidTransformArrayDevice& transforms
 );
 
 
